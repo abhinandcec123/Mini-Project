@@ -61,6 +61,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     }
   }
 
+  Future<void> _openAddHospitalDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _AddHospitalDialog(
+        onSubmit: (payload) async {
+          try {
+            final api = context.read<AuthProvider>().api;
+            await api.post('/admin/hospitals', body: payload);
+            if (!mounted) return;
+            Navigator.of(dialogContext).pop();
+            _loadAll();
+            _showSnack('Hospital added by admin');
+          } on ApiException catch (e) {
+            _showSnack(e.message);
+          }
+        },
+      ),
+    );
+  }
+
   Future<void> _removeDonor(int id) async {
     final confirmed = await _confirm('Remove this donor from the network?');
     if (!confirmed) return;
@@ -153,6 +173,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           if (role != 'admin') context.read<AuthProvider>().logout();
         },
         onLogout: () => context.read<AuthProvider>().logout(),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openAddHospitalDialog(),
+        icon: const Icon(Icons.add_business_outlined),
+        label: const Text('Add Hospital'),
       ),
       body: Column(
         children: [
@@ -435,6 +460,155 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           );
         },
       ),
+    );
+  }
+}
+
+class _AddHospitalDialog extends StatefulWidget {
+  final Future<void> Function(Map<String, dynamic>) onSubmit;
+
+  const _AddHospitalDialog({required this.onSubmit});
+
+  @override
+  State<_AddHospitalDialog> createState() => _AddHospitalDialogState();
+}
+
+class _AddHospitalDialogState extends State<_AddHospitalDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _regController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _addressController = TextEditingController();
+  final _cityController = TextEditingController();
+  final _latController = TextEditingController();
+  final _lngController = TextEditingController();
+  bool _skipGeocoding = true;
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _regController.dispose();
+    _phoneController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    _addressController.dispose();
+    _cityController.dispose();
+    _latController.dispose();
+    _lngController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add hospital manually'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'Hospital name'),
+                validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _regController,
+                decoration: const InputDecoration(labelText: 'Registration number'),
+                validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _phoneController,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(labelText: 'Phone'),
+                validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _emailController,
+                decoration: const InputDecoration(labelText: 'Email (optional)'),
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _passwordController,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'Password'),
+                validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _addressController,
+                decoration: const InputDecoration(labelText: 'Address'),
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _cityController,
+                decoration: const InputDecoration(labelText: 'City (optional)'),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _latController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Latitude (optional)'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _lngController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Longitude (optional)'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _skipGeocoding,
+                title: const Text('Admin override: skip geocoding'),
+                onChanged: (value) => setState(() => _skipGeocoding = value ?? true),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          onPressed: _submitting
+              ? null
+              : () async {
+                  if (!_formKey.currentState!.validate()) return;
+                  setState(() => _submitting = true);
+                  final payload = {
+                    'name': _nameController.text.trim(),
+                    'registration_number': _regController.text.trim(),
+                    'phone': _phoneController.text.trim(),
+                    'email': _emailController.text.trim().isEmpty ? null : _emailController.text.trim(),
+                    'password': _passwordController.text,
+                    'address': _addressController.text.trim(),
+                    'city': _cityController.text.trim(),
+                    'latitude': _latController.text.trim().isEmpty ? null : double.tryParse(_latController.text.trim()),
+                    'longitude': _lngController.text.trim().isEmpty ? null : double.tryParse(_lngController.text.trim()),
+                    'skip_geocoding': _skipGeocoding,
+                  };
+                  await widget.onSubmit(payload);
+                  if (mounted) setState(() => _submitting = false);
+                },
+          child: _submitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Save hospital'),
+        ),
+      ],
     );
   }
 }

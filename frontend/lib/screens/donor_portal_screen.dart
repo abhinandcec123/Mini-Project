@@ -959,30 +959,18 @@ class _ReliabilityCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final normalizedScore = score.clamp(0, 100).toDouble();
     return _DashboardPanel(
-      eyebrow: '3. AI RELIABILITY SCORE',
+      eyebrow: '3. RELIABILITY SCORE',
       icon: Icons.insights_outlined,
       accent: const Color(0xFFE11D48),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                '${normalizedScore.toStringAsFixed(0)}%',
-                style: const TextStyle(
-                    color: Color(0xFF172033),
-                    fontSize: 34,
-                    fontWeight: FontWeight.w800),
-              ),
-              const Spacer(),
-              const _StatusPill(
-                icon: Icons.auto_awesome,
-                label: 'Reliability',
-                color: Color(0xFFE11D48),
-                tint: Color(0xFFEFEEFF),
-              ),
-            ],
+          Text(
+            '${normalizedScore.toStringAsFixed(0)}%',
+            style: const TextStyle(
+                color: Color(0xFF172033),
+                fontSize: 34,
+                fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 11),
           ClipRRect(

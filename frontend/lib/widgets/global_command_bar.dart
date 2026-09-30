@@ -92,7 +92,7 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
   final String profileName;
   final VoidCallback? onNewRequest;
   final VoidCallback onExportProject;
-  final ValueChanged<String> onSwitchRole;
+  final ValueChanged<String>? onSwitchRole;
   final VoidCallback onLogout;
   final VoidCallback? onShowRadar;
   final VoidCallback? onShowAlgorithm;
@@ -102,7 +102,7 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
     required this.role,
     required this.profileName,
     required this.onExportProject,
-    required this.onSwitchRole,
+    this.onSwitchRole,
     required this.onLogout,
     this.onNewRequest,
     this.onShowRadar,
@@ -150,22 +150,12 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
                           ),
                           const SizedBox(width: 8),
                         ],
-                        if (!compact)
-                          PopupMenuButton<String>(
-                            tooltip: 'Switch role',
-                            onSelected: onSwitchRole,
-                            itemBuilder: (context) => const [
-                              PopupMenuItem(value: 'hospital', child: Text('Hospital ER')),
-                              PopupMenuItem(value: 'donor', child: Text('Donor Portal')),
-                              PopupMenuItem(value: 'admin', child: Text('Admin Oversight')),
-                            ],
-                            child: Chip(
-                              avatar: Icon(Icons.swap_horiz, color: activeColor, size: 17),
-                              label: Text(profileName.isEmpty ? roleLabel(role) : profileName, overflow: TextOverflow.ellipsis),
-                              visualDensity: VisualDensity.compact,
-                              side: const BorderSide(color: Color(0xFFE2E8F0)),
-                            ),
-                          ),
+                        Chip(
+                          avatar: Icon(Icons.security, color: activeColor, size: 17),
+                          label: Text(profileName.isEmpty ? roleLabel(role) : profileName, overflow: TextOverflow.ellipsis),
+                          visualDensity: VisualDensity.compact,
+                          side: const BorderSide(color: Color(0xFFE2E8F0)),
+                        ),
                         IconButton(
                           tooltip: DevicePreviewScope.of(context).mobilePreview ? 'Desktop preview' : 'Mobile preview',
                           onPressed: DevicePreviewScope.of(context).toggle,
@@ -189,9 +179,6 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: Row(
                   children: [
-                    _CommandTab(label: 'Hospital ER', selected: role == 'hospital', icon: Icons.local_hospital_outlined, onTap: () => onSwitchRole('hospital')),
-                    _CommandTab(label: 'Donor Portal', selected: role == 'donor', icon: Icons.bloodtype_outlined, onTap: () => onSwitchRole('donor')),
-                    _CommandTab(label: 'Admin Oversight', selected: role == 'admin', icon: Icons.shield_outlined, onTap: () => onSwitchRole('admin')),
                     if (onShowRadar != null) _CommandTab(label: 'Radar Map', icon: Icons.radar, onTap: onShowRadar!),
                     if (onShowAlgorithm != null) _CommandTab(label: 'AI Algorithm', icon: Icons.auto_awesome_outlined, onTap: onShowAlgorithm!),
                     if (onNewRequest != null)

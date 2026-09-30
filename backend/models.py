@@ -106,6 +106,7 @@ class Hospital(db.Model):
             "latitude": self.latitude,
             "longitude": self.longitude,
             "is_verified": self.is_verified,
+            "is_active": self.is_active,
         }
 
 
