@@ -1,0 +1,157 @@
+from flask import Blueprint, request, jsonify
+from extensions import db
+from models import Hospital, Donor, BloodRequest, RequestMatch, BLOOD_GROUPS, log_action
+from utils.security import role_required, current_user_id
+from utils.ai_matching import rank_donors_for_request
+
+hospital_bp = Blueprint("hospital", __name__, url_prefix="/api/hospital")
+
+
+def _get_current_hospital():
+    return Hospital.query.get(current_user_id())
+
+
+@hospital_bp.get("/me")
+@role_required("hospital")
+def get_profile():
+    hospital = _get_current_hospital()
+    if not hospital:
+        return jsonify({"error": "Hospital not found"}), 404
+    return jsonify(hospital.to_dict()), 200
+
+
+@hospital_bp.post("/requests")
+@role_required("hospital")
+def create_request():
+    hospital_id = current_user_id()
+    data = request.get_json(force=True)
+
+    if data.get("blood_group") not in BLOOD_GROUPS:
+        return jsonify({"error": "Invalid blood group"}), 400
+    if not data.get("patient_name"):
+        return jsonify({"error": "Patient name is required"}), 400
+
+    req = BloodRequest(
+        hospital_id=hospital_id,
+        patient_name=data["patient_name"].strip(),
+        blood_group=data["blood_group"],
+        units_needed=int(data.get("units_needed", 1)),
+        priority=data.get("priority", "normal"),
+        notes=data.get("notes"),
+    )
+    db.session.add(req)
+    db.session.commit()
+    log_action("hospital", hospital_id, "created_request", f"request_id={req.id}")
+    return jsonify(req.to_dict()), 201
+
+
+@hospital_bp.get("/requests")
+@role_required("hospital")
+def list_requests():
+    hospital_id = current_user_id()
+    priority = request.args.get("priority")
+    status = request.args.get("status")
+
+    query = BloodRequest.query.filter_by(hospital_id=hospital_id)
+    if priority:
+        query = query.filter_by(priority=priority)
+    if status:
+        query = query.filter_by(status=status)
+
+    reqs = query.order_by(BloodRequest.created_at.desc()).all()
+    return jsonify([r.to_dict() for r in reqs]), 200
+
+
+@hospital_bp.get("/requests/<int:request_id>/candidates")
+@role_required("hospital")
+def ai_candidates(request_id):
+    """The AI donor ranking view: returns donors sorted by match score."""
+    hospital_id = current_user_id()
+    req = BloodRequest.query.filter_by(id=request_id, hospital_id=hospital_id).first()
+    if not req:
+        return jsonify({"error": "Request not found"}), 404
+
+    hospital = _get_current_hospital()
+    max_distance = float(request.args.get("max_distance_km", 50))
+
+    donors = Donor.query.filter_by(is_active=True, is_available=True).all()
+    ranked = rank_donors_for_request(
+        donors, req.blood_group, hospital.latitude, hospital.longitude, max_distance
+    )
+
+    already_matched_ids = {m.donor_id for m in req.matches}
+    results = [
+        {
+            "donor": item["donor"].to_dict(include_contact=False),
+            "score": item["score"],
+            "distance_km": item["distance_km"],
+            "already_dispatched": item["donor"].id in already_matched_ids,
+        }
+        for item in ranked
+    ]
+    return jsonify(results), 200
+
+
+@hospital_bp.post("/requests/<int:request_id>/dispatch/<int:donor_id>")
+@role_required("hospital")
+def dispatch_to_donor(request_id, donor_id):
+    """'Send Request to Donor' — creates a RequestMatch the donor can accept/decline."""
+    hospital_id = current_user_id()
+    req = BloodRequest.query.filter_by(id=request_id, hospital_id=hospital_id).first()
+    if not req:
+        return jsonify({"error": "Request not found"}), 404
+
+    donor = Donor.query.get(donor_id)
+    if not donor or not donor.is_active:
+        return jsonify({"error": "Donor not found"}), 404
+
+    existing = RequestMatch.query.filter_by(request_id=request_id, donor_id=donor_id).first()
+    if existing:
+        return jsonify({"error": "Already dispatched to this donor", "match": existing.to_dict()}), 409
+
+    hospital = _get_current_hospital()
+    from utils.ai_matching import score_donor
+
+    score, distance = score_donor(donor, hospital.latitude, hospital.longitude, max_distance_km=10_000)
+
+    match = RequestMatch(request_id=request_id, donor_id=donor_id, match_score=score, distance_km=distance)
+    db.session.add(match)
+    db.session.commit()
+    log_action("hospital", hospital_id, "dispatched_request", f"request_id={request_id}, donor_id={donor_id}")
+    return jsonify(match.to_dict()), 201
+
+
+@hospital_bp.get("/requests/<int:request_id>/matches")
+@role_required("hospital")
+def request_matches(request_id):
+    hospital_id = current_user_id()
+    req = BloodRequest.query.filter_by(id=request_id, hospital_id=hospital_id).first()
+    if not req:
+        return jsonify({"error": "Request not found"}), 404
+    return jsonify([m.to_dict() for m in req.matches]), 200
+
+
+@hospital_bp.post("/requests/<int:request_id>/cancel")
+@role_required("hospital")
+def cancel_request(request_id):
+    hospital_id = current_user_id()
+    req = BloodRequest.query.filter_by(id=request_id, hospital_id=hospital_id).first()
+    if not req:
+        return jsonify({"error": "Request not found"}), 404
+    req.status = "cancelled"
+    db.session.commit()
+    log_action("hospital", hospital_id, "cancelled_request", f"request_id={request_id}")
+    return jsonify(req.to_dict()), 200
+
+
+@hospital_bp.post("/requests/<int:request_id>/fulfill")
+@role_required("hospital")
+def fulfill_request(request_id):
+    hospital_id = current_user_id()
+    req = BloodRequest.query.filter_by(id=request_id, hospital_id=hospital_id).first()
+    if not req:
+        return jsonify({"error": "Request not found"}), 404
+    req.status = "fulfilled"
+    db.session.commit()
+    log_action("hospital", hospital_id, "fulfilled_request", f"request_id={request_id}")
+    return jsonify(req.to_dict()), 200
