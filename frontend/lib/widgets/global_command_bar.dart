@@ -91,6 +91,7 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
   final String role;
   final String profileName;
   final VoidCallback? onNewRequest;
+  final VoidCallback? onExportProject;
   final ValueChanged<String>? onSwitchRole;
   final VoidCallback onLogout;
   final VoidCallback? onShowRadar;
@@ -103,6 +104,7 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
     this.onSwitchRole,
     required this.onLogout,
     this.onNewRequest,
+    this.onExportProject,
     this.onShowRadar,
     this.onShowAlgorithm,
   });
@@ -168,6 +170,12 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                           ),
                         ),
+                        if (onExportProject != null)
+                          IconButton(
+                            tooltip: 'Export project',
+                            onPressed: onExportProject,
+                            icon: const Icon(Icons.file_download_outlined, size: 19),
+                          ),
                         if (compact)
                           IconButton(tooltip: 'Sign out', onPressed: onLogout, icon: const Icon(Icons.logout, size: 19))
                         else
@@ -205,6 +213,24 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
         'admin' => 'Admin Oversight',
         _ => 'Hospital ER',
       };
+}
+
+void showProjectExportDialog(BuildContext context) {
+      showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Project source'),
+          content: const Text(
+            'The project source is available in the workspace. A runtime ZIP exporter is not configured for this build.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
 }
 
 class _CommandTab extends StatelessWidget {

@@ -17,6 +17,7 @@ class DonorAuthScreen extends StatefulWidget {
 class _DonorAuthScreenState extends State<DonorAuthScreen> {
   bool _isLogin = true;
   bool _loading = false;
+  bool _obscurePassword = true;
   String? _error;
 
   final _formKey = GlobalKey<FormState>();
@@ -54,9 +55,12 @@ class _DonorAuthScreenState extends State<DonorAuthScreen> {
             });
 
       if (!mounted) return;
-      await context
-          .read<AuthProvider>()
-          .setSession(result['token'], 'donor', result['user']);
+      await context.read<AuthProvider>().setSession(
+            result['token'],
+            'donor',
+            result['user'],
+            passwordChangeRequired: result['password_change_required'] == true,
+          );
       if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
@@ -178,9 +182,22 @@ class _DonorAuthScreenState extends State<DonorAuthScreen> {
             ],
             TextFormField(
               controller: _password,
-              obscureText: true,
-              decoration: const InputDecoration(
-                  labelText: 'Password', border: OutlineInputBorder()),
+              obscureText: _obscurePassword,
+              decoration: InputDecoration(
+                labelText: 'Password',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  tooltip: _obscurePassword ? 'Show password' : 'Hide password',
+                  icon: Icon(
+                    _obscurePassword
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                  ),
+                  onPressed: () => setState(
+                    () => _obscurePassword = !_obscurePassword,
+                  ),
+                ),
+              ),
               validator: (v) =>
                   (v == null || v.length < 6) ? 'Minimum 6 characters' : null,
             ),

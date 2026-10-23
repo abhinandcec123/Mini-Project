@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/donor.dart';
+import '../utils/location_format.dart';
 
 /// A ranked donor row in the AI Recommendation view, with score + distance
 /// and a "Send Request" action (mirrors the original AIRecommendationView).
@@ -37,18 +38,20 @@ class DonorRankCard extends StatelessWidget {
               radius: 24,
               backgroundColor: _scoreColor.withValues(alpha: 0.15),
               child: Text(score.toStringAsFixed(0),
-                  style: TextStyle(color: _scoreColor, fontWeight: FontWeight.bold)),
+                  style: TextStyle(
+                      color: _scoreColor, fontWeight: FontWeight.bold)),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(donor.fullName, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(donor.fullName,
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
                   Text(
                     '${donor.bloodGroup} • ${donor.totalDonations} donations'
-                    '${distanceKm != null ? ' • ${distanceKm!.toStringAsFixed(1)} km' : ''}',
+                    '${distanceKm != null ? ' • ${formatDistanceKm(distanceKm!)} away' : ''}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   Text(
@@ -60,8 +63,10 @@ class DonorRankCard extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             alreadyDispatched
-                ? const Chip(label: Text('Sent'), visualDensity: VisualDensity.compact)
-                : FilledButton(onPressed: onDispatch, child: const Text('Send')),
+                ? const Chip(
+                    label: Text('Sent'), visualDensity: VisualDensity.compact)
+                : FilledButton(
+                    onPressed: onDispatch, child: const Text('Send')),
           ],
         ),
       ),

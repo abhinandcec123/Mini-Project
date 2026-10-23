@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/blood_request.dart';
+import '../utils/location_format.dart';
 
 Color priorityColor(String priority) {
   switch (priority) {
@@ -104,14 +105,8 @@ class MatchCard extends StatelessWidget {
   final RequestMatch match;
   final VoidCallback? onAccept;
   final VoidCallback? onDecline;
-  final VoidCallback? onComplete;
-
   const MatchCard(
-      {super.key,
-      required this.match,
-      this.onAccept,
-      this.onDecline,
-      this.onComplete});
+      {super.key, required this.match, this.onAccept, this.onDecline});
 
   @override
   Widget build(BuildContext context) {
@@ -157,7 +152,7 @@ class MatchCard extends StatelessWidget {
               Text(
                   'Patient: ${req.patientName} • ${req.bloodGroup} • ${req.unitsNeeded} unit(s)'),
             if (match.distanceKm != null)
-              Text('${match.distanceKm!.toStringAsFixed(1)} km away',
+              Text('${formatDistanceKm(match.distanceKm!)} away',
                   style: const TextStyle(color: Colors.grey)),
             if (req?.priority == 'critical') ...[
               const SizedBox(height: 7),
@@ -182,15 +177,34 @@ class MatchCard extends StatelessWidget {
                 ],
               ),
             ],
-            if (match.status == 'accepted' && onComplete != null) ...[
+            if (match.status == 'accepted') ...[
               const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: onComplete,
-                  icon: const Icon(Icons.check_circle_outline),
-                  label: const Text('Mark Donation Complete'),
-                ),
+              const Row(
+                children: [
+                  Icon(Icons.hourglass_top, size: 18, color: Color(0xFF64748B)),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Accepted. Waiting for hospital approval after donation.',
+                      style: TextStyle(color: Color(0xFF64748B)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (match.status == 'completed') ...[
+              const SizedBox(height: 10),
+              const Row(
+                children: [
+                  Icon(Icons.verified, size: 18, color: Color(0xFF047857)),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Donation approved. Your certificate is available to download.',
+                      style: TextStyle(color: Color(0xFF047857)),
+                    ),
+                  ),
+                ],
               ),
             ],
           ],

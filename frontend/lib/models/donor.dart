@@ -7,6 +7,13 @@ class Donor {
   final String? city;
   final double? latitude;
   final double? longitude;
+  final double? fallbackLatitude;
+  final double? fallbackLongitude;
+  final double? effectiveLatitude;
+  final double? effectiveLongitude;
+  final String? locationSource;
+  final double? locationAccuracyKm;
+  final double? locationAccuracyMeters;
   final bool isAvailable;
   final double reliabilityScore;
   final int totalDonations;
@@ -24,6 +31,13 @@ class Donor {
     this.city,
     this.latitude,
     this.longitude,
+    this.fallbackLatitude,
+    this.fallbackLongitude,
+    this.effectiveLatitude,
+    this.effectiveLongitude,
+    this.locationSource,
+    this.locationAccuracyKm,
+    this.locationAccuracyMeters,
     required this.isAvailable,
     required this.reliabilityScore,
     required this.totalDonations,
@@ -34,6 +48,13 @@ class Donor {
   });
 
   factory Donor.fromJson(Map<String, dynamic> json) {
+    final latitude = (json['latitude'] as num?)?.toDouble();
+    final longitude = (json['longitude'] as num?)?.toDouble();
+    final fallbackLat = (json['fallback_latitude'] as num?)?.toDouble();
+    final fallbackLng = (json['fallback_longitude'] as num?)?.toDouble();
+    final effectiveLat = (json['current_latitude'] as num?)?.toDouble();
+    final effectiveLng = (json['current_longitude'] as num?)?.toDouble();
+
     return Donor(
       id: json['id'],
       fullName: json['full_name'] ?? '',
@@ -41,8 +62,15 @@ class Donor {
       age: json['age'] ?? 0,
       gender: json['gender'],
       city: json['city'],
-      latitude: (json['latitude'] as num?)?.toDouble(),
-      longitude: (json['longitude'] as num?)?.toDouble(),
+      latitude: latitude,
+      longitude: longitude,
+      fallbackLatitude: fallbackLat,
+      fallbackLongitude: fallbackLng,
+      effectiveLatitude: effectiveLat,
+      effectiveLongitude: effectiveLng,
+      locationSource: json['location_source'],
+      locationAccuracyKm: (json['location_accuracy_km'] as num?)?.toDouble(),
+      locationAccuracyMeters: (json['location_accuracy_m'] as num?)?.toDouble(),
       isAvailable: json['is_available'] ?? false,
       reliabilityScore: (json['reliability_score'] as num?)?.toDouble() ?? 0,
       totalDonations: json['total_donations'] ?? 0,

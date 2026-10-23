@@ -5,6 +5,7 @@ import 'screens/auth_hub_screen.dart';
 import 'screens/donor_portal_screen.dart';
 import 'screens/hospital_dashboard_screen.dart';
 import 'screens/admin_dashboard_screen.dart';
+import 'screens/change_password_screen.dart';
 import 'widgets/global_command_bar.dart';
 
 void main() {
@@ -96,6 +97,9 @@ class _RootRouter extends StatelessWidget {
     }
     if (!auth.isAuthenticated) {
       return const AuthHubView();
+    }
+    if (auth.passwordChangeRequired) {
+      return const ChangePasswordScreen();
     }
     switch (auth.role) {
       case 'donor':

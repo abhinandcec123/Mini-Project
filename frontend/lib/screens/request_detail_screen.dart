@@ -15,11 +15,15 @@ class RequestDetailScreen extends StatefulWidget {
 
 class _RequestDetailScreenState extends State<RequestDetailScreen> {
   bool _loading = true;
+  String? _actionError;
+  String? _actionMessage;
+  String _requestStatus = 'open';
   List<RequestMatch> _matches = [];
 
   @override
   void initState() {
     super.initState();
+    _requestStatus = widget.request.status;
     _load();
   }
 
@@ -27,10 +31,15 @@ class _RequestDetailScreenState extends State<RequestDetailScreen> {
     setState(() => _loading = true);
     try {
       final api = context.read<AuthProvider>().api;
-      final result = await api.get('/hospital/requests/${widget.request.id}/matches');
-      setState(() => _matches = (result as List).map((e) => RequestMatch.fromJson(e)).toList());
+      final result =
+          await api.get('/hospital/requests/${widget.request.id}/matches');
+      setState(() => _matches =
+          (result as List).map((e) => RequestMatch.fromJson(e)).toList());
     } on ApiException catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -40,9 +49,65 @@ class _RequestDetailScreenState extends State<RequestDetailScreen> {
     try {
       final api = context.read<AuthProvider>().api;
       await api.post('/hospital/requests/${widget.request.id}/$action');
-      if (mounted) Navigator.of(context).pop(true);
+      if (mounted) {
+        Navigator.of(context).pop(true);
+      }
     } on ApiException catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    }
+  }
+
+  Future<void> _confirmDonation(RequestMatch match) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Approve completed donation?'),
+        content: const Text(
+          'Confirm that this donor completed the donation. This updates the donor record and issues a certificate.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Approve donation'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _actionError = null;
+      _actionMessage = null;
+    });
+    try {
+      final api = context.read<AuthProvider>().api;
+      final result = await api.post(
+        '/hospital/requests/${widget.request.id}/matches/${match.id}/confirm',
+      );
+      if (!mounted) return;
+      setState(() {
+        _requestStatus = result['request']['status'];
+        _actionMessage = result['request']['status'] == 'fulfilled'
+            ? 'Donation approved. All units are fulfilled and a certificate has been issued.'
+            : 'One donation unit approved. ${result['approved_units']} of '
+                '${result['units_needed']} units approved so far.';
+      });
+      await _load();
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _actionError = e.message);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _actionError = 'Could not approve this donation. Please retry.',
+        );
+      }
     }
   }
 
@@ -52,12 +117,16 @@ class _RequestDetailScreenState extends State<RequestDetailScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(req.patientName)),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          await Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => AiRecommendationScreen(request: req)),
-          );
-          _load();
-        },
+        onPressed: _requestStatus == 'open'
+            ? () async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => AiRecommendationScreen(request: req),
+                  ),
+                );
+                _load();
+              }
+            : null,
         icon: const Icon(Icons.auto_awesome),
         label: const Text('Find Donors'),
       ),
@@ -72,53 +141,97 @@ class _RequestDetailScreenState extends State<RequestDetailScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('${req.bloodGroup} • ${req.unitsNeeded} unit(s) • ${req.priority.toUpperCase()}',
+                    Text(
+                        '${req.bloodGroup} • ${req.unitsNeeded} unit(s) • ${req.priority.toUpperCase()}',
                         style: const TextStyle(fontWeight: FontWeight.bold)),
                     if (req.notes != null && req.notes!.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       Text(req.notes!),
                     ],
                     const SizedBox(height: 8),
-                    Text('Status: ${req.status}', style: const TextStyle(color: Colors.grey)),
+                    Text('Status: $_requestStatus',
+                        style: const TextStyle(color: Colors.grey)),
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 8),
-            if (req.status == 'open')
+            if (_requestStatus == 'open')
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton(
+                    child: OutlinedButton.icon(
                       onPressed: () => _updateStatus('cancel'),
-                      child: const Text('Cancel Request'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: () => _updateStatus('fulfill'),
-                      child: const Text('Mark Fulfilled'),
+                      icon: const Icon(Icons.cancel_outlined),
+                      label: const Text('Cancel Request'),
                     ),
                   ),
                 ],
               ),
             const SizedBox(height: 20),
-            Text('Dispatched to (${_matches.length})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            Text('Dispatched to (${_matches.length})',
+                style:
+                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             const SizedBox(height: 10),
+            if (_actionMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  _actionMessage!,
+                  style: const TextStyle(
+                    color: Color(0xFF047857),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            if (_actionError != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  _actionError!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
             if (_loading)
               const Center(child: CircularProgressIndicator())
             else if (_matches.isEmpty)
-              const Text('No donors contacted yet. Tap "Find Donors" to see AI-ranked matches.')
+              const Text(
+                  'No donors contacted yet. Tap "Find Donors" to see AI-ranked matches.')
             else
               ..._matches.map((m) => Card(
-                    child: ListTile(
-                      title: Text('Donor #${m.donorId}'),
-                      subtitle: Text(
-                        '${m.status.toUpperCase()}'
-                        '${m.distanceKm != null ? ' • ${m.distanceKm!.toStringAsFixed(1)} km' : ''}'
-                        '${m.matchScore != null ? ' • score ${m.matchScore!.toStringAsFixed(0)}' : ''}',
-                      ),
+                    child: Column(
+                      children: [
+                        ListTile(
+                          title: Text('Donor #${m.donorId}'),
+                          subtitle: Text(
+                            '${m.status.toUpperCase()}'
+                            '${m.distanceKm != null ? ' • ${m.distanceKm!.toStringAsFixed(1)} km' : ''}'
+                            '${m.matchScore != null ? ' • score ${m.matchScore!.toStringAsFixed(0)}' : ''}',
+                          ),
+                          trailing: m.status == 'completed'
+                              ? const Tooltip(
+                                  message: 'Certificate issued',
+                                  child: Icon(
+                                    Icons.verified,
+                                    color: Color(0xFF047857),
+                                  ),
+                                )
+                              : null,
+                        ),
+                        if (m.status == 'accepted')
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: FilledButton.icon(
+                                onPressed:
+                                    _loading ? null : () => _confirmDonation(m),
+                                icon: const Icon(Icons.verified_outlined),
+                                label: const Text('Approve completed donation'),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   )),
             const SizedBox(height: 80),

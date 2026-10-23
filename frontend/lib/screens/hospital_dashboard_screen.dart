@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
+import '../services/current_location_service.dart';
 import '../models/blood_request.dart';
 import '../utils/constants.dart';
 import '../widgets/request_card.dart';
@@ -23,8 +24,10 @@ class _HospitalDashboardScreenState extends State<HospitalDashboardScreen> {
   bool _loading = true;
   String? _error;
   List<BloodRequest> _requests = [];
+  Map<String, dynamic>? _hospitalProfile;
   String? _priorityFilter;
   final GlobalKey _radarKey = GlobalKey();
+  bool _locationBusy = false;
 
   @override
   void initState() {
@@ -42,14 +45,50 @@ class _HospitalDashboardScreenState extends State<HospitalDashboardScreen> {
       final result = await api.get('/hospital/requests',
           query:
               _priorityFilter != null ? {'priority': _priorityFilter} : null);
-      setState(() => _requests =
-          (result as List).map((e) => BloodRequest.fromJson(e)).toList());
+      final profile = await api.get('/hospital/me');
+      if (!mounted) return;
+      setState(() {
+        _requests =
+            (result as List).map((e) => BloodRequest.fromJson(e)).toList();
+        _hospitalProfile = profile;
+      });
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } catch (e) {
       setState(() => _error = 'Could not load requisitions.');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _setHospitalLocation() async {
+    setState(() => _locationBusy = true);
+    try {
+      final api = context.read<AuthProvider>().api;
+      final position = await CurrentLocationService.getCurrentPosition();
+      final profile = await api.put('/hospital/location', body: {
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+        'accuracy_m': position.accuracy,
+      });
+      if (mounted) {
+        setState(() => _hospitalProfile = profile);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Hospital GPS pin updated.')),
+        );
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    } finally {
+      if (mounted) setState(() => _locationBusy = false);
     }
   }
 
@@ -70,7 +109,7 @@ class _HospitalDashboardScreenState extends State<HospitalDashboardScreen> {
         role: 'hospital',
         profileName: user?['name'] ?? 'Hospital ER',
         onNewRequest: _openCreateModal,
-        onExportProject: () => _showUnavailableExport(context),
+        onExportProject: () => showProjectExportDialog(context),
         onSwitchRole: (role) {
           if (role != 'hospital') context.read<AuthProvider>().logout();
         },
@@ -82,7 +121,8 @@ class _HospitalDashboardScreenState extends State<HospitalDashboardScreen> {
         onShowAlgorithm: _requests.isEmpty
             ? null
             : () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => AiRecommendationScreen(request: _requests.first),
+                  builder: (_) =>
+                      AiRecommendationScreen(request: _requests.first),
                 )),
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -123,6 +163,12 @@ class _HospitalDashboardScreenState extends State<HospitalDashboardScreen> {
                                 0,
                                 (total, request) => total + request.unitsNeeded,
                               ),
+                            ),
+                            const SizedBox(height: 14),
+                            _HospitalLocationCard(
+                              profile: _hospitalProfile,
+                              busy: _locationBusy,
+                              onSetLocation: _setHospitalLocation,
                             ),
                             const SizedBox(height: 14),
                             _GeodesicRadar(key: _radarKey),
@@ -190,17 +236,6 @@ class _HospitalDashboardScreenState extends State<HospitalDashboardScreen> {
   }
 }
 
-void _showUnavailableExport(BuildContext context) {
-  showDialog<void>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Project source'),
-      content: const Text('The project source is available in the workspace. A runtime ZIP exporter is not configured for this build.'),
-      actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
-    ),
-  );
-}
-
 class _FacilitySummary extends StatelessWidget {
   final String name;
   final bool verified;
@@ -253,13 +288,17 @@ class _FacilitySummary extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
                   decoration: BoxDecoration(
-                    color: verified ? const Color(0xFFECFDF5) : const Color(0xFFFFF7ED),
+                    color: verified
+                        ? const Color(0xFFECFDF5)
+                        : const Color(0xFFFFF7ED),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
                     verified ? 'VERIFIED FACILITY' : 'VERIFICATION PENDING',
                     style: TextStyle(
-                      color: verified ? const Color(0xFF047857) : const Color(0xFFB45309),
+                      color: verified
+                          ? const Color(0xFF047857)
+                          : const Color(0xFFB45309),
                       fontSize: 9,
                       fontWeight: FontWeight.w700,
                     ),
@@ -272,8 +311,12 @@ class _FacilitySummary extends StatelessWidget {
               spacing: 8,
               runSpacing: 6,
               children: [
-                _FacilityDetail(icon: Icons.workspace_premium_outlined, label: 'Trauma tier not on file'),
-                _FacilityDetail(icon: Icons.phone_in_talk_outlined, label: '24/7 helpline not configured'),
+                _FacilityDetail(
+                    icon: Icons.workspace_premium_outlined,
+                    label: 'Trauma tier not on file'),
+                _FacilityDetail(
+                    icon: Icons.phone_in_talk_outlined,
+                    label: '24/7 helpline not configured'),
               ],
             ),
             const SizedBox(height: 18),
@@ -281,10 +324,20 @@ class _FacilitySummary extends StatelessWidget {
               spacing: 16,
               runSpacing: 14,
               children: [
-                _MetricValue(label: 'Active requests', value: '$activeRequests', icon: Icons.bloodtype_outlined),
-                const _MetricValue(label: 'Nearby compatible', value: '--', icon: Icons.people_outline),
-                _MetricValue(label: 'Units en route', value: '$unitsRequested', icon: Icons.local_shipping_outlined),
-                const _MetricValue(label: 'Average ETA', value: '--', icon: Icons.schedule),
+                _MetricValue(
+                    label: 'Active requests',
+                    value: '$activeRequests',
+                    icon: Icons.bloodtype_outlined),
+                const _MetricValue(
+                    label: 'Nearby compatible',
+                    value: '--',
+                    icon: Icons.people_outline),
+                _MetricValue(
+                    label: 'Units en route',
+                    value: '$unitsRequested',
+                    icon: Icons.local_shipping_outlined),
+                const _MetricValue(
+                    label: 'Average ETA', value: '--', icon: Icons.schedule),
               ],
             ),
           ],
@@ -324,6 +377,57 @@ class _MetricValue extends StatelessWidget {
   }
 }
 
+class _HospitalLocationCard extends StatelessWidget {
+  final Map<String, dynamic>? profile;
+  final bool busy;
+  final VoidCallback onSetLocation;
+
+  const _HospitalLocationCard({
+    required this.profile,
+    required this.busy,
+    required this.onSetLocation,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasGpsPin = profile?['location_source'] == 'device_gps' &&
+        profile?['latitude'] != null &&
+        profile?['longitude'] != null;
+    final accuracy = (profile?['gps_accuracy_m'] as num?)?.toDouble();
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            const Icon(Icons.local_hospital_outlined,
+                color: Color(0xFFCF2349)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                hasGpsPin
+                    ? 'Hospital GPS pin set${accuracy == null ? '' : ' · ±${accuracy.round()} m accuracy'}'
+                    : 'Set a GPS pin at the hospital for accurate donor distances.',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+            TextButton(
+              onPressed: busy ? null : onSetLocation,
+              child: busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(hasGpsPin ? 'Refresh pin' : 'Set pin'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _FacilityDetail extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -344,7 +448,8 @@ class _FacilityDetail extends StatelessWidget {
         children: [
           Icon(icon, size: 14, color: const Color(0xFF64748B)),
           const SizedBox(width: 6),
-          Text(label, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+          Text(label,
+              style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
         ],
       ),
     );
@@ -365,7 +470,9 @@ class _GeodesicRadarState extends State<_GeodesicRadar>
   @override
   void initState() {
     super.initState();
-    _sweep = AnimationController(vsync: this, duration: const Duration(seconds: 5))..repeat();
+    _sweep =
+        AnimationController(vsync: this, duration: const Duration(seconds: 5))
+          ..repeat();
   }
 
   @override
@@ -409,7 +516,8 @@ class _GeodesicRadarState extends State<_GeodesicRadar>
               builder: (context, _) => SizedBox(
                 width: 220,
                 height: 220,
-                child: CustomPaint(painter: _RadarPainter(progress: _sweep.value)),
+                child:
+                    CustomPaint(painter: _RadarPainter(progress: _sweep.value)),
               ),
             ),
           ),
@@ -422,7 +530,8 @@ class _GeodesicRadarState extends State<_GeodesicRadar>
                 SizedBox(width: 10),
                 _RadarLegend(color: Color(0xFFD97706), label: 'Compatible'),
                 SizedBox(width: 10),
-                Text('Illustrative pins', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
+                Text('Illustrative pins',
+                    style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
               ],
             ),
           ),
@@ -444,7 +553,8 @@ class _RadarLegend extends StatelessWidget {
         children: [
           Icon(Icons.circle, size: 7, color: color),
           const SizedBox(width: 4),
-          Text(label, style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 9)),
+          Text(label,
+              style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 9)),
         ],
       );
 }
@@ -481,9 +591,11 @@ class _RadarPainter extends CustomPainter {
     ];
     for (var i = 0; i < pinOffsets.length; i++) {
       final offset = pinOffsets[i];
-      final point = Offset(center.dx + offset.dx * radius, center.dy + offset.dy * radius);
+      final point = Offset(
+          center.dx + offset.dx * radius, center.dy + offset.dy * radius);
       canvas.drawCircle(point, 4, Paint()..color = pinColors[i]);
-      canvas.drawCircle(point, 7, Paint()..color = pinColors[i].withValues(alpha: 0.25));
+      canvas.drawCircle(
+          point, 7, Paint()..color = pinColors[i].withValues(alpha: 0.25));
     }
     final axisPaint = Paint()
       ..color = const Color(0xFF0E7490).withValues(alpha: 0.38)
@@ -498,14 +610,16 @@ class _RadarPainter extends CustomPainter {
         endAngle: progress * math.pi * 2 + 0.7,
         colors: const [Color(0x0006B6D4), Color(0x6606B6D4)],
       ).createShader(Rect.fromCircle(center: center, radius: radius));
-    canvas.drawArc(Rect.fromCircle(center: center, radius: radius), progress * math.pi * 2, 0.7, true, sweepPaint);
+    canvas.drawArc(Rect.fromCircle(center: center, radius: radius),
+        progress * math.pi * 2, 0.7, true, sweepPaint);
     canvas.drawCircle(center, 6, Paint()..color = const Color(0xFFE11D48));
     canvas.drawCircle(center, 10,
         Paint()..color = const Color(0xFFE11D48).withValues(alpha: 0.22));
   }
 
   @override
-  bool shouldRepaint(covariant _RadarPainter oldDelegate) => oldDelegate.progress != progress;
+  bool shouldRepaint(covariant _RadarPainter oldDelegate) =>
+      oldDelegate.progress != progress;
 }
 
 class _CreateRequestSheet extends StatefulWidget {
@@ -547,7 +661,8 @@ class _CreateRequestSheetState extends State<_CreateRequestSheet> {
       final api = context.read<AuthProvider>().api;
       final caseDetails = [
         if (_caseId.text.trim().isNotEmpty) 'Case ID: ${_caseId.text.trim()}',
-        if (_diagnosis.text.trim().isNotEmpty) 'Diagnosis: ${_diagnosis.text.trim()}',
+        if (_diagnosis.text.trim().isNotEmpty)
+          'Diagnosis: ${_diagnosis.text.trim()}',
         if (_notes.text.trim().isNotEmpty) 'Reason: ${_notes.text.trim()}',
       ].join(' | ');
       await api.post('/hospital/requests', body: {
@@ -586,7 +701,8 @@ class _CreateRequestSheetState extends State<_CreateRequestSheet> {
                 Icon(Icons.emergency, color: Color(0xFFE11D48)),
                 SizedBox(width: 8),
                 Text('Emergency requisition',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    style:
+                        TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               ],
             ),
             const SizedBox(height: 12),
@@ -594,10 +710,14 @@ class _CreateRequestSheetState extends State<_CreateRequestSheet> {
               decoration: const InputDecoration(labelText: 'Hospital facility'),
               child: Row(
                 children: [
-                  const Icon(Icons.local_hospital_outlined, size: 18, color: Color(0xFF64748B)),
+                  const Icon(Icons.local_hospital_outlined,
+                      size: 18, color: Color(0xFF64748B)),
                   const SizedBox(width: 8),
-                  Expanded(child: Text(hospital['name'] ?? 'Current hospital account')),
-                  const Icon(Icons.lock_outline, size: 15, color: Color(0xFF94A3B8)),
+                  Expanded(
+                      child:
+                          Text(hospital['name'] ?? 'Current hospital account')),
+                  const Icon(Icons.lock_outline,
+                      size: 15, color: Color(0xFF94A3B8)),
                 ],
               ),
             ),
@@ -708,13 +828,20 @@ class _CreateRequestSheetState extends State<_CreateRequestSheet> {
                   label: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(tier.$2, style: TextStyle(color: selected ? tier.$4 : const Color(0xFF334155), fontWeight: FontWeight.w800, fontSize: 10)),
+                      Text(tier.$2,
+                          style: TextStyle(
+                              color:
+                                  selected ? tier.$4 : const Color(0xFF334155),
+                              fontWeight: FontWeight.w800,
+                              fontSize: 10)),
                       Text(tier.$3, style: const TextStyle(fontSize: 9)),
                     ],
                   ),
                   selectedColor: tier.$4.withValues(alpha: 0.13),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  side: BorderSide(color: selected ? tier.$4 : const Color(0xFFE2E8F0)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                  side: BorderSide(
+                      color: selected ? tier.$4 : const Color(0xFFE2E8F0)),
                 );
               }).toList(),
             ),

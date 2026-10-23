@@ -6,6 +6,7 @@
 // tree, read text, and verify that the values of widget properties are correct.
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:lifepulse_ai/main.dart';
@@ -14,6 +15,7 @@ void main() {
   testWidgets('LifePulse launches the role access hub',
       (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({});
     await tester.pumpWidget(const LifePulseApp());
     await tester.pumpAndSettle();
 

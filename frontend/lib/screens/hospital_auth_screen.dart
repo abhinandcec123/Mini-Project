@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
@@ -16,6 +17,7 @@ class HospitalAuthScreen extends StatefulWidget {
 class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
   bool _isLogin = true;
   bool _loading = false;
+  bool _obscurePassword = true;
   String? _error;
   String _facilityType = 'Trauma Center (Level 1/2)';
   bool _isAccredited = false;
@@ -56,9 +58,12 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
       );
 
       if (!mounted) return;
-      await context
-          .read<AuthProvider>()
-          .setSession(result['token'], 'hospital', result['user']);
+      await context.read<AuthProvider>().setSession(
+            result['token'],
+            'hospital',
+            result['user'],
+            passwordChangeRequired: result['password_change_required'] == true,
+          );
       if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
@@ -70,10 +75,15 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
     }
   }
 
-  InputDecoration _fieldDecoration({String? hintText, IconData? prefixIcon}) {
+  InputDecoration _fieldDecoration({
+    String? hintText,
+    IconData? prefixIcon,
+    Widget? suffixIcon,
+  }) {
     return InputDecoration(
       hintText: hintText,
       prefixIcon: prefixIcon == null ? null : Icon(prefixIcon, size: 18),
+      suffixIcon: suffixIcon,
       filled: true,
       fillColor: Colors.white,
       hintStyle: const TextStyle(color: Color(0xFF9AA5B1)),
@@ -133,7 +143,9 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
       allowRegistration: true,
       signInLabel: 'Sign In to Account',
       registrationLabel: 'Register New Hospital',
-      sectionTitle: _isLogin ? 'Hospital Sign In' : 'Hospital Medical Facility Registration',
+      sectionTitle: _isLogin
+          ? 'Hospital Sign In'
+          : 'Hospital Medical Facility Registration',
       sectionDescription: _isLogin
           ? 'Access your hospital dashboard and live blood request queue.'
           : 'Enroll your medical facility to issue emergency blood requisitions.',
@@ -149,30 +161,50 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
                   TextFormField(
                     controller: _phone,
                     keyboardType: TextInputType.phone,
+                    maxLength: 10,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                    ],
                     decoration: _fieldDecoration(
-                      hintText: '+1 (555) 911-BLOD',
+                      hintText: '10-digit mobile number',
                       prefixIcon: Icons.phone_outlined,
                     ),
-                    validator: (v) => (v == null || v.trim().length < 10)
-                        ? 'Enter a valid 10-digit number'
-                        : null,
+                    validator: (v) =>
+                        (v == null || !RegExp(r'^[0-9]{10}$').hasMatch(v))
+                            ? 'Enter a valid 10-digit number'
+                            : null,
                   ),
                   const SizedBox(height: 16),
                   TextFormField(
                     controller: _password,
-                    obscureText: true,
+                    obscureText: _obscurePassword,
                     decoration: _fieldDecoration(
                       hintText: 'Enter your facility password',
                       prefixIcon: Icons.lock_outline,
+                      suffixIcon: IconButton(
+                        tooltip: _obscurePassword
+                            ? 'Show password'
+                            : 'Hide password',
+                        icon: Icon(
+                          _obscurePassword
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined,
+                        ),
+                        onPressed: () => setState(
+                          () => _obscurePassword = !_obscurePassword,
+                        ),
+                      ),
                     ),
-                    validator: (v) =>
-                        (v == null || v.length < 6) ? 'Minimum 6 characters' : null,
+                    validator: (v) => (v == null || v.length < 6)
+                        ? 'Minimum 6 characters'
+                        : null,
                   ),
                   const SizedBox(height: 20),
                   if (_error != null)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 12),
-                      child: Text(_error!, style: const TextStyle(color: Color(0xFFB32635))),
+                      child: Text(_error!,
+                          style: const TextStyle(color: Color(0xFFB32635))),
                     ),
                   FilledButton(
                     onPressed: _loading ? null : _submit,
@@ -188,7 +220,8 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
                         ? const SizedBox(
                             height: 20,
                             width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
                           )
                         : const Text('Sign In to Account'),
                   ),
@@ -214,7 +247,8 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
                             color: const Color(0xFFCF2349),
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: const Icon(Icons.local_hospital_outlined, color: Colors.white, size: 20),
+                          child: const Icon(Icons.local_hospital_outlined,
+                              color: Colors.white, size: 20),
                         ),
                         const SizedBox(width: 12),
                         const Expanded(
@@ -252,9 +286,11 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
                             _label('Facility Name', required: true),
                             TextFormField(
                               controller: _name,
-                              decoration: _fieldDecoration(hintText: 'e.g. Memorial Trauma Center'),
-                              validator: (v) =>
-                                  (v == null || v.trim().isEmpty) ? 'Required' : null,
+                              decoration: _fieldDecoration(
+                                  hintText: 'e.g. Memorial Trauma Center'),
+                              validator: (v) => (v == null || v.trim().isEmpty)
+                                  ? 'Required'
+                                  : null,
                             ),
                           ],
                         ),
@@ -267,9 +303,11 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
                             _label('Facility Code', required: true),
                             TextFormField(
                               controller: _regNumber,
-                              decoration: _fieldDecoration(hintText: 'e.g. MTC-09'),
-                              validator: (v) =>
-                                  (v == null || v.trim().isEmpty) ? 'Required' : null,
+                              decoration:
+                                  _fieldDecoration(hintText: 'e.g. MTC-09'),
+                              validator: (v) => (v == null || v.trim().isEmpty)
+                                  ? 'Required'
+                                  : null,
                             ),
                           ],
                         ),
@@ -302,13 +340,17 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
                             _label('Facility Type', required: true),
                             DropdownButtonFormField<String>(
                               initialValue: _facilityType,
-                              decoration: _fieldDecoration(hintText: 'Select facility type'),
+                              decoration: _fieldDecoration(
+                                  hintText: 'Select facility type'),
                               items: const [
                                 'Trauma Center (Level 1/2)',
                                 'General Hospital',
                                 'Children\'s Hospital',
                                 'Private Clinic',
-                              ].map((type) => DropdownMenuItem(value: type, child: Text(type))).toList(),
+                              ]
+                                  .map((type) => DropdownMenuItem(
+                                      value: type, child: Text(type)))
+                                  .toList(),
                               onChanged: (value) {
                                 if (value != null) {
                                   setState(() => _facilityType = value);
@@ -335,9 +377,10 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
                                 hintText: '+1 (555) 911-BLOD',
                                 prefixIcon: Icons.phone_outlined,
                               ),
-                              validator: (v) => (v == null || v.trim().length < 10)
-                                  ? 'Enter a valid 10-digit number'
-                                  : null,
+                              validator: (v) =>
+                                  (v == null || v.trim().length < 10)
+                                      ? 'Enter a valid 10-digit number'
+                                      : null,
                             ),
                           ],
                         ),
@@ -352,7 +395,8 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
                               controller: _email,
                               keyboardType: TextInputType.emailAddress,
                               decoration: _fieldDecoration(
-                                hintText: 'Dr. Sarah Johnson (Chief of Surgery)',
+                                hintText:
+                                    'Dr. Sarah Johnson (Chief of Surgery)',
                               ),
                             ),
                           ],
@@ -361,16 +405,32 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
                     ],
                   ),
                   const SizedBox(height: 18),
-                  _label('Facility Security Password (Strict Policy)', required: true),
+                  _label('Facility Security Password (Strict Policy)',
+                      required: true),
                   TextFormField(
                     controller: _password,
-                    obscureText: true,
+                    obscureText: _obscurePassword,
                     decoration: _fieldDecoration(
-                      hintText: 'Min 8 chars with uppercase, lowercase, number, symbol',
+                      hintText:
+                          'Min 8 chars with uppercase, lowercase, number, symbol',
                       prefixIcon: Icons.lock_outline,
+                      suffixIcon: IconButton(
+                        tooltip: _obscurePassword
+                            ? 'Show password'
+                            : 'Hide password',
+                        icon: Icon(
+                          _obscurePassword
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined,
+                        ),
+                        onPressed: () => setState(
+                          () => _obscurePassword = !_obscurePassword,
+                        ),
+                      ),
                     ),
-                    validator: (v) =>
-                        (v == null || v.length < 6) ? 'Minimum 6 characters' : null,
+                    validator: (v) => (v == null || v.length < 6)
+                        ? 'Minimum 6 characters'
+                        : null,
                   ),
                   const SizedBox(height: 18),
                   _label('Street Address', required: true),
@@ -382,14 +442,16 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
                       hintText: '450 Medical Center Boulevard',
                       prefixIcon: Icons.location_on_outlined,
                     ),
-                    validator: (value) => (value == null || value.trim().isEmpty)
-                        ? 'Enter the hospital address'
-                        : null,
+                    validator: (value) =>
+                        (value == null || value.trim().isEmpty)
+                            ? 'Enter the hospital address'
+                            : null,
                   ),
                   const SizedBox(height: 18),
                   CheckboxListTile(
                     value: _isAccredited,
-                    onChanged: (value) => setState(() => _isAccredited = value ?? false),
+                    onChanged: (value) =>
+                        setState(() => _isAccredited = value ?? false),
                     controlAffinity: ListTileControlAffinity.leading,
                     contentPadding: EdgeInsets.zero,
                     activeColor: const Color(0xFFCF2349),
@@ -402,7 +464,8 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
                   if (_error != null)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 12),
-                      child: Text(_error!, style: const TextStyle(color: Color(0xFFB32635))),
+                      child: Text(_error!,
+                          style: const TextStyle(color: Color(0xFFB32635))),
                     ),
                   FilledButton(
                     onPressed: _loading || !_isAccredited ? null : _submit,
@@ -418,7 +481,8 @@ class _HospitalAuthScreenState extends State<HospitalAuthScreen> {
                         ? const SizedBox(
                             height: 20,
                             width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
                           )
                         : const Row(
                             mainAxisAlignment: MainAxisAlignment.center,

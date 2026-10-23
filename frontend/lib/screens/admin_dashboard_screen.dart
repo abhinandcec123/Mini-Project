@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/api_service.dart';
 import '../widgets/global_command_bar.dart';
+import '../widgets/shared_location_map.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -14,21 +18,39 @@ class AdminDashboardScreen extends StatefulWidget {
 class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  Timer? _locationRefreshTimer;
   Map<String, dynamic> _stats = {};
   Map<String, dynamic> _inventory = {};
   List<dynamic> _donors = [];
   List<dynamic> _hospitals = [];
   List<dynamic> _logs = [];
+  List<dynamic> _donorLocations = [];
   String _donorQuery = '';
   String _hospitalQuery = '';
   bool _loading = true;
+  bool _refreshingDonorLocations = false;
+  String? _donorLocationError;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(length: 6, vsync: this)
+      ..addListener(_handleTabChange);
     _loadAll();
+  }
+
+  void _handleTabChange() {
+    if (_tabController.index == 5) {
+      _refreshDonorLocations();
+      _locationRefreshTimer ??= Timer.periodic(
+        const Duration(seconds: 15),
+        (_) => _refreshDonorLocations(),
+      );
+    } else {
+      _locationRefreshTimer?.cancel();
+      _locationRefreshTimer = null;
+    }
   }
 
   Future<void> _loadAll() async {
@@ -44,6 +66,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         api.get('/admin/donors'),
         api.get('/admin/hospitals'),
         api.get('/admin/audit-logs'),
+        api.get('/admin/donor-locations'),
       ]);
       setState(() {
         _stats = results[0];
@@ -51,6 +74,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         _donors = results[2];
         _hospitals = results[3];
         _logs = results[4];
+        _donorLocations = results[5];
+        _donorLocationError = null;
       });
     } on ApiException catch (e) {
       setState(() => _error = e.message);
@@ -58,6 +83,30 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       setState(() => _error = 'Could not load admin data.');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _refreshDonorLocations() async {
+    if (_refreshingDonorLocations || !mounted) return;
+    _refreshingDonorLocations = true;
+    try {
+      final locations =
+          await context.read<AuthProvider>().api.get('/admin/donor-locations');
+      if (mounted) {
+        setState(() {
+          _donorLocations = locations;
+          _donorLocationError = null;
+        });
+      }
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _donorLocationError = e.message);
+    } catch (_) {
+      if (mounted) {
+        setState(
+            () => _donorLocationError = 'Could not refresh donor locations.');
+      }
+    } finally {
+      _refreshingDonorLocations = false;
     }
   }
 
@@ -116,6 +165,61 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     }
   }
 
+  Future<void> _issueTemporaryPassword(
+    String accountType,
+    int accountId,
+    String accountName,
+  ) async {
+    final api = context.read<AuthProvider>().api;
+    final confirmed = await _confirm(
+      'Issue a new temporary password for $accountName? Their current password and existing sessions will stop working.',
+    );
+    if (!confirmed) return;
+    try {
+      final result = await api.post(
+        '/admin/users/$accountType/$accountId/temporary-password',
+      );
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Temporary password issued'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('$accountName must use this password to sign in:'),
+              const SizedBox(height: 12),
+              SelectableText(
+                result['temporary_password'],
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Copy or share it securely now. It will not be shown again, and the account holder must choose a new password at sign-in.',
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      );
+      if (mounted) await _loadAll();
+    } on ApiException catch (e) {
+      _showSnack(e.message);
+    } catch (_) {
+      _showSnack('Could not issue a temporary password. Try again.');
+    }
+  }
+
   Future<bool> _confirm(String message) async {
     final result = await showDialog<bool>(
       context: context,
@@ -148,12 +252,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 .where((entry) => !entry.key.contains('password'))
                 .map((entry) => Padding(
                       padding: const EdgeInsets.symmetric(vertical: 3),
-                      child: Text('${entry.key.replaceAll('_', ' ')}: ${entry.value ?? 'Not on file'}'),
+                      child: Text(
+                          '${entry.key.replaceAll('_', ' ')}: ${entry.value ?? 'Not on file'}'),
                     ))
                 .toList(),
           ),
         ),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'))
+        ],
       ),
     );
   }
@@ -164,11 +273,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
   @override
+  void dispose() {
+    _locationRefreshTimer?.cancel();
+    _tabController.removeListener(_handleTabChange);
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: GlobalCommandBar(
         role: 'admin',
-        profileName: context.watch<AuthProvider>().user?['full_name'] ?? 'Admin Oversight',
+        profileName: context.watch<AuthProvider>().user?['full_name'] ??
+            'Admin Oversight',
         onSwitchRole: (role) {
           if (role != 'admin') context.read<AuthProvider>().logout();
         },
@@ -184,15 +302,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           Material(
             color: Colors.white,
             child: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          tabs: const [
-            Tab(text: 'Overview'),
-            Tab(text: 'Donor Registry'),
-            Tab(text: 'Hospital Network'),
-            Tab(text: 'City Inventory'),
-            Tab(text: 'Audit Security Logs'),
-          ],
+              controller: _tabController,
+              isScrollable: true,
+              tabs: const [
+                Tab(text: 'Overview'),
+                Tab(text: 'Live Donor Map'),
+                Tab(text: 'Donor Registry'),
+                Tab(text: 'Hospital Network'),
+                Tab(text: 'City Inventory'),
+                Tab(text: 'Audit Security Logs'),
+              ],
             ),
           ),
           Expanded(
@@ -201,15 +320,89 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                 : _error != null
                     ? Center(child: Text(_error!))
                     : TabBarView(
-                  controller: _tabController,
-                  children: [
-                    _buildOverview(),
-                    _buildDonors(),
-                    _buildHospitals(),
-                    _buildInventory(),
-                    _buildAuditLog(),
-                  ],
-                    ),
+                        controller: _tabController,
+                        children: [
+                          _buildOverview(),
+                          _buildDonorMap(),
+                          _buildDonors(),
+                          _buildHospitals(),
+                          _buildInventory(),
+                          _buildAuditLog(),
+                        ],
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDonorMap() {
+    final pins = _donorLocations
+        .whereType<Map<String, dynamic>>()
+        .map((donor) {
+          final latitude = (donor['latitude'] as num?)?.toDouble();
+          final longitude = (donor['longitude'] as num?)?.toDouble();
+          if (latitude == null || longitude == null) return null;
+          final isTestPin = donor['location_source'] == 'test_pin';
+          return SharedLocationPin(
+            point: LatLng(latitude, longitude),
+            label:
+                '${donor['full_name']} · ${donor['blood_group']}${isTestPin ? ' · TEST PIN' : ''}',
+            color:
+                isTestPin ? const Color(0xFF7C3AED) : const Color(0xFF0891B2),
+          );
+        })
+        .whereType<SharedLocationPin>()
+        .toList();
+
+    return RefreshIndicator(
+      onRefresh: _refreshDonorLocations,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Available, opted-in donors',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Refresh shared locations',
+                onPressed: _refreshDonorLocations,
+                icon: _refreshingDonorLocations
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+          Text(
+            '${pins.length} shared pin(s) · refreshes every 15 seconds while this tab is open. Donors choose when to update their own location.',
+            style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+          ),
+          if (_donorLocationError != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _donorLocationError!,
+              style: const TextStyle(color: Color(0xFFB91C1C)),
+            ),
+          ],
+          const SizedBox(height: 12),
+          SharedLocationMap(
+            pins: pins,
+            height: 500,
+            emptyMessage:
+                'No available donors have opted in to share a current location.',
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Teal pins are GPS locations. Purple pins are donor-selected test locations.',
+            style: TextStyle(color: Color(0xFF64748B), fontSize: 12),
           ),
         ],
       ),
@@ -260,8 +453,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           const SizedBox(height: 4),
           const Text('Eligible and available donor reserve by blood group',
               style: TextStyle(color: Color(0xFF64748B), fontSize: 12)),
-            const SizedBox(height: 4),
-            const Text('Counts are eligible donors, not stored blood units.',
+          const SizedBox(height: 4),
+          const Text('Counts are eligible donors, not stored blood units.',
               style: TextStyle(color: Color(0xFFB45309), fontSize: 11)),
           const SizedBox(height: 14),
           GridView.builder(
@@ -291,24 +484,33 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Text('${entry.value}', style: const TextStyle(fontSize: 23, fontWeight: FontWeight.w700)),
+                          Text('${entry.value}',
+                              style: const TextStyle(
+                                  fontSize: 23, fontWeight: FontWeight.w700)),
                           const SizedBox(width: 5),
-                          const Padding(padding: EdgeInsets.only(bottom: 3), child: Text('donors', style: TextStyle(color: Color(0xFF64748B), fontSize: 10))),
+                          const Padding(
+                              padding: EdgeInsets.only(bottom: 3),
+                              child: Text('donors',
+                                  style: TextStyle(
+                                      color: Color(0xFF64748B), fontSize: 10))),
                         ],
                       ),
                       const SizedBox(height: 7),
                       ClipRRect(
                         borderRadius: BorderRadius.circular(4),
                         child: LinearProgressIndicator(
-                          value: ((entry.value as num).toDouble() / 10).clamp(0.0, 1.0),
+                          value: ((entry.value as num).toDouble() / 10)
+                              .clamp(0.0, 1.0),
                           minHeight: 6,
-                          color: (entry.value as num) <= 2 ? const Color(0xFFE11D48) : const Color(0xFF059669),
+                          color: (entry.value as num) <= 2
+                              ? const Color(0xFFE11D48)
+                              : const Color(0xFF059669),
                           backgroundColor: const Color(0xFFE2E8F0),
                         ),
                       ),
                       const Text('Planning threshold: 10 donors',
-                          style: TextStyle(
-                              color: Color(0xFF64748B), fontSize: 9)),
+                          style:
+                              TextStyle(color: Color(0xFF64748B), fontSize: 9)),
                     ],
                   ),
                 ),
@@ -357,21 +559,47 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         padding: const EdgeInsets.all(16),
         children: [
           TextField(
-            decoration: const InputDecoration(prefixIcon: Icon(Icons.search), labelText: 'Search donors'),
+            decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search), labelText: 'Search donors'),
             onChanged: (value) => setState(() => _donorQuery = value),
           ),
           const SizedBox(height: 12),
-          if (donors.isEmpty) const Center(child: Text('No donors match this search.')),
+          if (donors.isEmpty)
+            const Center(child: Text('No donors match this search.')),
           ...donors.map((d) => Card(
                 child: ListTile(
-                  leading: CircleAvatar(backgroundColor: const Color(0xFFFFE4E8), child: Text(d['blood_group'] ?? '?', style: const TextStyle(color: Color(0xFFBE123C), fontWeight: FontWeight.w700))),
+                  leading: CircleAvatar(
+                      backgroundColor: const Color(0xFFFFE4E8),
+                      child: Text(d['blood_group'] ?? '?',
+                          style: const TextStyle(
+                              color: Color(0xFFBE123C),
+                              fontWeight: FontWeight.w700))),
                   title: Text(d['full_name'] ?? ''),
-                  subtitle: Text('${d['city'] ?? 'Unknown city'} • ${d['total_donations'] ?? 0} donations'),
+                  subtitle: Text(
+                      '${d['city'] ?? 'Unknown city'} • ${d['total_donations'] ?? 0} donations'),
                   trailing: Wrap(
                     spacing: 0,
                     children: [
-                      IconButton(tooltip: 'Inspect donor profile', icon: const Icon(Icons.visibility_outlined), onPressed: () => _inspectRecord('Donor profile', Map<String, dynamic>.from(d))),
-                      IconButton(tooltip: 'Revoke donor access', icon: const Icon(Icons.person_remove_outlined, color: Color(0xFFE11D48)), onPressed: () => _removeDonor(d['id'])),
+                      IconButton(
+                          tooltip: 'Issue temporary password',
+                          icon: const Icon(Icons.lock_reset_outlined),
+                          onPressed: d['is_active'] == false
+                              ? null
+                              : () => _issueTemporaryPassword(
+                                    'donor',
+                                    d['id'],
+                                    d['full_name'] ?? 'this donor',
+                                  )),
+                      IconButton(
+                          tooltip: 'Inspect donor profile',
+                          icon: const Icon(Icons.visibility_outlined),
+                          onPressed: () => _inspectRecord(
+                              'Donor profile', Map<String, dynamic>.from(d))),
+                      IconButton(
+                          tooltip: 'Revoke donor access',
+                          icon: const Icon(Icons.person_remove_outlined,
+                              color: Color(0xFFE11D48)),
+                          onPressed: () => _removeDonor(d['id'])),
                     ],
                   ),
                 ),
@@ -389,7 +617,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       final query = _hospitalQuery.toLowerCase();
       return hospital['name'].toString().toLowerCase().contains(query) ||
           hospital['city'].toString().toLowerCase().contains(query) ||
-          hospital['registration_number'].toString().toLowerCase().contains(query);
+          hospital['registration_number']
+              .toString()
+              .toLowerCase()
+              .contains(query);
     }).toList();
     return RefreshIndicator(
       onRefresh: _loadAll,
@@ -397,41 +628,56 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         padding: const EdgeInsets.all(16),
         children: [
           TextField(
-            decoration: const InputDecoration(prefixIcon: Icon(Icons.search), labelText: 'Search hospitals'),
+            decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search), labelText: 'Search hospitals'),
             onChanged: (value) => setState(() => _hospitalQuery = value),
           ),
           const SizedBox(height: 12),
-          if (hospitals.isEmpty) const Center(child: Text('No hospitals match this search.')),
+          if (hospitals.isEmpty)
+            const Center(child: Text('No hospitals match this search.')),
           ...hospitals.map((h) => Card(
-            child: ListTile(
-              leading: Icon(
-                Icons.local_hospital,
-                color: h['is_verified'] == true ? Colors.green : Colors.grey,
-              ),
-              title: Text(h['name'] ?? ''),
-              subtitle: Text(
-                  '${h['city'] ?? ''} • ${h['is_verified'] == true ? 'Verified' : 'Unverified'}'),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (h['is_verified'] != true)
-                    IconButton(
-                      icon: const Icon(Icons.verified, color: Colors.blue),
-                      onPressed: () => _verifyHospital(h['id']),
-                    ),
-                  IconButton(
-                    tooltip: 'Inspect hospital profile',
-                    icon: const Icon(Icons.visibility_outlined),
-                    onPressed: () => _inspectRecord('Hospital profile', Map<String, dynamic>.from(h)),
+                child: ListTile(
+                  leading: Icon(
+                    Icons.local_hospital,
+                    color:
+                        h['is_verified'] == true ? Colors.green : Colors.grey,
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline, color: Colors.red),
-                    onPressed: () => _removeHospital(h['id']),
+                  title: Text(h['name'] ?? ''),
+                  subtitle: Text(
+                      '${h['city'] ?? ''} • ${h['is_verified'] == true ? 'Verified' : 'Unverified'}'),
+                  trailing: Wrap(
+                    children: [
+                      if (h['is_verified'] != true)
+                        IconButton(
+                          icon: const Icon(Icons.verified, color: Colors.blue),
+                          onPressed: () => _verifyHospital(h['id']),
+                        ),
+                      IconButton(
+                        tooltip: 'Issue temporary password',
+                        icon: const Icon(Icons.lock_reset_outlined),
+                        onPressed: h['is_active'] == false
+                            ? null
+                            : () => _issueTemporaryPassword(
+                                  'hospital',
+                                  h['id'],
+                                  h['name'] ?? 'this hospital',
+                                ),
+                      ),
+                      IconButton(
+                        tooltip: 'Inspect hospital profile',
+                        icon: const Icon(Icons.visibility_outlined),
+                        onPressed: () => _inspectRecord(
+                            'Hospital profile', Map<String, dynamic>.from(h)),
+                      ),
+                      IconButton(
+                        icon:
+                            const Icon(Icons.delete_outline, color: Colors.red),
+                        onPressed: () => _removeHospital(h['id']),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-          )),
+                ),
+              )),
         ],
       ),
     );
@@ -485,6 +731,7 @@ class _AddHospitalDialogState extends State<_AddHospitalDialog> {
   final _latController = TextEditingController();
   final _lngController = TextEditingController();
   bool _skipGeocoding = true;
+  bool _obscurePassword = true;
   bool _submitting = false;
 
   @override
@@ -514,31 +761,50 @@ class _AddHospitalDialogState extends State<_AddHospitalDialog> {
               TextFormField(
                 controller: _nameController,
                 decoration: const InputDecoration(labelText: 'Hospital name'),
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Required' : null,
               ),
               const SizedBox(height: 10),
               TextFormField(
                 controller: _regController,
-                decoration: const InputDecoration(labelText: 'Registration number'),
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                decoration:
+                    const InputDecoration(labelText: 'Registration number'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Required' : null,
               ),
               const SizedBox(height: 10),
               TextFormField(
                 controller: _phoneController,
                 keyboardType: TextInputType.phone,
                 decoration: const InputDecoration(labelText: 'Phone'),
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Required' : null,
               ),
               const SizedBox(height: 10),
               TextFormField(
                 controller: _emailController,
-                decoration: const InputDecoration(labelText: 'Email (optional)'),
+                decoration:
+                    const InputDecoration(labelText: 'Email (optional)'),
               ),
               const SizedBox(height: 10),
               TextFormField(
                 controller: _passwordController,
-                obscureText: true,
-                decoration: const InputDecoration(labelText: 'Password'),
+                obscureText: _obscurePassword,
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  suffixIcon: IconButton(
+                    tooltip:
+                        _obscurePassword ? 'Show password' : 'Hide password',
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                    onPressed: () => setState(
+                      () => _obscurePassword = !_obscurePassword,
+                    ),
+                  ),
+                ),
                 validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
               ),
               const SizedBox(height: 10),
@@ -557,16 +823,20 @@ class _AddHospitalDialogState extends State<_AddHospitalDialog> {
                   Expanded(
                     child: TextFormField(
                       controller: _latController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(labelText: 'Latitude (optional)'),
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                          labelText: 'Latitude (optional)'),
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: TextFormField(
                       controller: _lngController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(labelText: 'Longitude (optional)'),
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                          labelText: 'Longitude (optional)'),
                     ),
                   ),
                 ],
@@ -576,7 +846,8 @@ class _AddHospitalDialogState extends State<_AddHospitalDialog> {
                 contentPadding: EdgeInsets.zero,
                 value: _skipGeocoding,
                 title: const Text('Admin override: skip geocoding'),
-                onChanged: (value) => setState(() => _skipGeocoding = value ?? true),
+                onChanged: (value) =>
+                    setState(() => _skipGeocoding = value ?? true),
                 controlAffinity: ListTileControlAffinity.leading,
               ),
             ],
@@ -584,7 +855,9 @@ class _AddHospitalDialogState extends State<_AddHospitalDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel')),
         FilledButton(
           onPressed: _submitting
               ? null
@@ -595,18 +868,29 @@ class _AddHospitalDialogState extends State<_AddHospitalDialog> {
                     'name': _nameController.text.trim(),
                     'registration_number': _regController.text.trim(),
                     'phone': _phoneController.text.trim(),
-                    'email': _emailController.text.trim().isEmpty ? null : _emailController.text.trim(),
+                    'email': _emailController.text.trim().isEmpty
+                        ? null
+                        : _emailController.text.trim(),
                     'password': _passwordController.text,
                     'address': _addressController.text.trim(),
                     'city': _cityController.text.trim(),
-                    'latitude': _latController.text.trim().isEmpty ? null : double.tryParse(_latController.text.trim()),
-                    'longitude': _lngController.text.trim().isEmpty ? null : double.tryParse(_lngController.text.trim()),
+                    'latitude': _latController.text.trim().isEmpty
+                        ? null
+                        : double.tryParse(_latController.text.trim()),
+                    'longitude': _lngController.text.trim().isEmpty
+                        ? null
+                        : double.tryParse(_lngController.text.trim()),
                     'skip_geocoding': _skipGeocoding,
                   };
                   await widget.onSubmit(payload);
                   if (mounted) setState(() => _submitting = false);
                 },
-          child: _submitting ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Save hospital'),
+          child: _submitting
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Save hospital'),
         ),
       ],
     );

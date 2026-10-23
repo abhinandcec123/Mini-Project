@@ -28,7 +28,9 @@ def score_donor(donor, request_lat, request_lng, max_distance_km=50, include_una
     if not donor.is_eligible_now():
         return None, None
 
-    distance = haversine_km(donor.latitude, donor.longitude, request_lat, request_lng)
+    donor_lat = donor.effective_latitude if hasattr(donor, "effective_latitude") else donor.latitude
+    donor_lng = donor.effective_longitude if hasattr(donor, "effective_longitude") else donor.longitude
+    distance = haversine_km(donor_lat, donor_lng, request_lat, request_lng)
 
     # Distance sub-score (40 pts): closer is better, capped at max_distance_km
     if distance is None:
@@ -48,7 +50,7 @@ def score_donor(donor, request_lat, request_lng, max_distance_km=50, include_una
     experience_score = min(10, donor.total_donations * 2)
 
     total = distance_score + reliability_score + eligibility_score + experience_score
-    return round(total, 2), (round(distance, 2) if distance is not None else None)
+    return round(total, 2), (round(distance, 4) if distance is not None else None)
 
 
 def rank_donors_for_request(donors, blood_group, request_lat, request_lng, max_distance_km=50, include_unavailable=False):

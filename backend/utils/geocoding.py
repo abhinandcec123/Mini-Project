@@ -3,7 +3,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-
 class GeocodingError(Exception):
     def __init__(self, message, status_code):
         super().__init__(message)
@@ -11,29 +10,42 @@ class GeocodingError(Exception):
 
 
 def geocode_address(address, api_key):
-    if not api_key:
-        raise GeocodingError("Google Maps Geocoding is not configured on the server.", 503)
+    address_text = (address or "").strip()
+    if not address_text:
+        raise GeocodingError("Address is required.", 400)
 
-    query = urlencode({"address": address, "key": api_key})
+    unresolved = {
+        "latitude": None,
+        "longitude": None,
+        "fallback_latitude": None,
+        "fallback_longitude": None,
+        "city": None,
+        "location_source": "unresolved",
+        "accuracy_radius_km": None,
+    }
+    if not api_key:
+        return unresolved
+
+    query = urlencode({"address": address_text, "key": api_key})
     url = f"https://maps.googleapis.com/maps/api/geocode/json?{query}"
     try:
         with urlopen(url, timeout=8) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise GeocodingError("Google Maps address lookup is temporarily unavailable.", 502) from error
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return unresolved
 
-    if payload.get("status") == "ZERO_RESULTS":
-        raise GeocodingError("Google Maps could not find that address. Check it and try again.", 422)
+    if payload.get("status") in {"ZERO_RESULTS", "REQUEST_DENIED", "INVALID_REQUEST"}:
+        return unresolved
     if payload.get("status") != "OK" or not payload.get("results"):
-        raise GeocodingError("Google Maps could not verify the address. Check the Maps API configuration.", 502)
+        return unresolved
 
     result = payload["results"][0]
     location = result.get("geometry", {}).get("location", {})
     try:
         latitude = float(location["lat"])
         longitude = float(location["lng"])
-    except (KeyError, TypeError, ValueError) as error:
-        raise GeocodingError("Google Maps returned an invalid location for that address.", 502) from error
+    except (KeyError, TypeError, ValueError):
+        return unresolved
 
     city = None
     components = result.get("address_components", [])
@@ -46,4 +58,12 @@ def geocode_address(address, api_key):
             city = city_component.get("long_name")
             break
 
-    return {"latitude": latitude, "longitude": longitude, "city": city}
+    return {
+        "latitude": latitude,
+        "longitude": longitude,
+        "fallback_latitude": None,
+        "fallback_longitude": None,
+        "city": city,
+        "location_source": "google_geocode",
+        "accuracy_radius_km": None,
+    }

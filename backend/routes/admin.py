@@ -1,3 +1,5 @@
+import secrets
+import string
 from flask import Blueprint, request, jsonify, current_app
 from extensions import db, bcrypt
 from models import Donor, Hospital, BloodRequest, AuditLog, log_action, normalize_phone
@@ -12,6 +14,29 @@ admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 def list_donors():
     donors = Donor.query.order_by(Donor.created_at.desc()).all()
     return jsonify([d.to_dict() for d in donors]), 200
+
+
+@admin_bp.get("/donor-locations")
+@role_required("admin")
+def donor_locations():
+    donors = Donor.query.filter_by(
+        is_active=True,
+        is_available=True,
+        location_sharing_enabled=True,
+    ).all()
+    return jsonify([
+        {
+            "id": donor.id,
+            "full_name": donor.full_name,
+            "blood_group": donor.blood_group,
+            "latitude": donor.effective_latitude,
+            "longitude": donor.effective_longitude,
+            "location_source": donor.gps_location_source,
+        }
+        for donor in donors
+        if donor.effective_latitude is not None
+        and donor.effective_longitude is not None
+    ]), 200
 
 
 @admin_bp.post("/hospitals")
@@ -45,18 +70,12 @@ def create_hospital():
     except (TypeError, ValueError):
         return jsonify({"error": "Latitude and longitude must be numeric values"}), 400
 
+    location = None
     if address and not skip_geocoding:
-        try:
-            location = geocode_address(address, current_app.config.get("GOOGLE_MAPS_API_KEY"))
-            latitude = latitude if latitude is not None else location["latitude"]
-            longitude = longitude if longitude is not None else location["longitude"]
-            city = city or location.get("city") or ""
-        except GeocodingError as error:
-            if current_app.config.get("GOOGLE_MAPS_API_KEY"):
-                return jsonify({"error": str(error)}), error.status_code
-            # Admin override: allow manual registration when no Maps key is configured.
-            latitude = latitude
-            longitude = longitude
+        location = geocode_address(address, current_app.config.get("GOOGLE_MAPS_API_KEY"))
+        latitude = latitude if latitude is not None else location["latitude"]
+        longitude = longitude if longitude is not None else location["longitude"]
+        city = city or location.get("city") or ""
 
     hospital = Hospital(
         name=data["name"].strip(),
@@ -68,6 +87,10 @@ def create_hospital():
         city=city,
         latitude=latitude,
         longitude=longitude,
+        fallback_latitude=(location or {}).get("fallback_latitude", latitude),
+        fallback_longitude=(location or {}).get("fallback_longitude", longitude),
+        location_source=(location or {}).get("location_source", "address"),
+        location_accuracy_km=(location or {}).get("accuracy_radius_km", 0.0),
         is_verified=True,
         is_active=True,
     )
@@ -82,6 +105,36 @@ def create_hospital():
 def list_hospitals():
     hospitals = Hospital.query.order_by(Hospital.created_at.desc()).all()
     return jsonify([h.to_dict() for h in hospitals]), 200
+
+
+@admin_bp.post("/users/<string:account_type>/<int:account_id>/temporary-password")
+@role_required("admin")
+def issue_temporary_password(account_type, account_id):
+    account_model = {"donor": Donor, "hospital": Hospital}.get(account_type)
+    if account_model is None:
+        return jsonify({"error": "Temporary passwords can only be issued to donors or hospitals"}), 400
+    account = db.session.get(account_model, account_id)
+    if not account:
+        return jsonify({"error": f"{account_type.title()} not found"}), 404
+    if not account.is_active:
+        return jsonify({"error": "Cannot reset a deactivated account"}), 409
+
+    alphabet = string.ascii_letters + string.digits
+    temporary_password = "".join(secrets.choice(alphabet) for _ in range(16))
+    account.password_hash = bcrypt.generate_password_hash(temporary_password).decode("utf-8")
+    account.must_change_password = True
+    account.password_version += 1
+    db.session.commit()
+    log_action(
+        "admin",
+        current_user_id(),
+        "issued_temporary_password",
+        f"account_type={account_type}, account_id={account_id}",
+    )
+    return jsonify({
+        "temporary_password": temporary_password,
+        "message": "Share this temporary password securely. It is shown only once.",
+    }), 200
 
 
 @admin_bp.post("/hospitals/<int:hospital_id>/verify")
