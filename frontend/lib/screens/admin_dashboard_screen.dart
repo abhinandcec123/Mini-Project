@@ -69,8 +69,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           try {
             final api = context.read<AuthProvider>().api;
             await api.post('/admin/hospitals', body: payload);
-            if (!mounted) return;
+            if (!dialogContext.mounted) return;
             Navigator.of(dialogContext).pop();
+            if (!mounted) return;
             _loadAll();
             _showSnack('Hospital added by admin');
           } on ApiException catch (e) {
@@ -82,10 +83,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
   Future<void> _removeDonor(int id) async {
+    final api = context.read<AuthProvider>().api;
     final confirmed = await _confirm('Remove this donor from the network?');
     if (!confirmed) return;
     try {
-      final api = context.read<AuthProvider>().api;
       await api.delete('/admin/donors/$id');
       _loadAll();
     } on ApiException catch (e) {
@@ -94,10 +95,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
   Future<void> _removeHospital(int id) async {
+    final api = context.read<AuthProvider>().api;
     final confirmed = await _confirm('Remove this hospital from the network?');
     if (!confirmed) return;
     try {
-      final api = context.read<AuthProvider>().api;
       await api.delete('/admin/hospitals/$id');
       _loadAll();
     } on ApiException catch (e) {
@@ -168,7 +169,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       appBar: GlobalCommandBar(
         role: 'admin',
         profileName: context.watch<AuthProvider>().user?['full_name'] ?? 'Admin Oversight',
-        onExportProject: () => showProjectExportDialog(context),
         onSwitchRole: (role) {
           if (role != 'admin') context.read<AuthProvider>().logout();
         },

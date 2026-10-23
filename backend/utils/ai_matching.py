@@ -19,9 +19,11 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def score_donor(donor, request_lat, request_lng, max_distance_km=50):
+def score_donor(donor, request_lat, request_lng, max_distance_km=50, include_unavailable=False):
     """Returns (score 0-100, distance_km) or (None, None) if disqualified."""
-    if not donor.is_available or not donor.is_active:
+    if not donor.is_active:
+        return None, None
+    if not donor.is_available and not include_unavailable:
         return None, None
     if not donor.is_eligible_now():
         return None, None
@@ -49,13 +51,19 @@ def score_donor(donor, request_lat, request_lng, max_distance_km=50):
     return round(total, 2), (round(distance, 2) if distance is not None else None)
 
 
-def rank_donors_for_request(donors, blood_group, request_lat, request_lng, max_distance_km=50):
+def rank_donors_for_request(donors, blood_group, request_lat, request_lng, max_distance_km=50, include_unavailable=False):
     compatible_groups = COMPATIBLE_DONORS.get(blood_group, [blood_group])
     ranked = []
     for donor in donors:
         if donor.blood_group not in compatible_groups:
             continue
-        score, distance = score_donor(donor, request_lat, request_lng, max_distance_km)
+        score, distance = score_donor(
+            donor,
+            request_lat,
+            request_lng,
+            max_distance_km,
+            include_unavailable=include_unavailable,
+        )
         if score is None:
             continue
         ranked.append({"donor": donor, "score": score, "distance_km": distance})

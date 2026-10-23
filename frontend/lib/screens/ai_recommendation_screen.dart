@@ -99,11 +99,13 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
       final api = context.read<AuthProvider>().api;
       await api
           .post('/hospital/requests/${widget.request.id}/dispatch/$donorId');
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Request sent to donor.')),
       );
       _load();
     } on ApiException catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(e.message)));
     }

@@ -96,30 +96,16 @@ def decline_request(match_id):
 @donor_bp.post("/requests/<int:match_id>/complete")
 @role_required("donor")
 def complete_donation(match_id):
-    """Marks a donation as fulfilled and issues a certificate."""
+    """Donation completion requires hospital approval before a certificate is issued."""
     donor_id = current_user_id()
     match = RequestMatch.query.filter_by(id=match_id, donor_id=donor_id).first()
     if not match:
         return jsonify({"error": "Request not found"}), 404
-    if match.status != "accepted":
-        return jsonify({"error": "Only an accepted request can be marked complete"}), 400
-
-    match.status = "completed"
-    donor = _get_current_donor()
-    donor.last_donation_date = datetime.utcnow()
-    donor.total_donations = (donor.total_donations or 0) + 1
-    donor.reliability_score = min(100, donor.reliability_score + 2)
-
-    cert = DonationCertificate(
-        donor_id=donor.id,
-        match_id=match.id,
-        hospital_name=match.request.hospital.name if match.request and match.request.hospital else "LifePulse Network",
-        units_donated=1,
-    )
-    db.session.add(cert)
-    db.session.commit()
-    log_action("donor", donor_id, "completed_donation", f"match_id={match_id}")
-    return jsonify({"match": match.to_dict(), "certificate": cert.to_dict()}), 200
+    if match.status == "completed":
+        return jsonify({"error": "This donation has already been approved by the hospital."}), 400
+    return jsonify({
+        "error": "Hospital approval is required before a donation certificate can be issued."
+    }), 400
 
 
 @donor_bp.get("/certificates")

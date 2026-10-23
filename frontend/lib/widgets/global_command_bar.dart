@@ -91,7 +91,6 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
   final String role;
   final String profileName;
   final VoidCallback? onNewRequest;
-  final VoidCallback onExportProject;
   final ValueChanged<String>? onSwitchRole;
   final VoidCallback onLogout;
   final VoidCallback? onShowRadar;
@@ -101,7 +100,6 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
     super.key,
     required this.role,
     required this.profileName,
-    required this.onExportProject,
     this.onSwitchRole,
     required this.onLogout,
     this.onNewRequest,
@@ -119,6 +117,8 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
       'admin' => const Color(0xFF0F172A),
       _ => const Color(0xFFE11D48),
     };
+    final preview = DevicePreviewScope.of(context);
+    final mobilePreview = preview.mobilePreview;
 
     return Material(
       color: Colors.white,
@@ -156,12 +156,18 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
                           visualDensity: VisualDensity.compact,
                           side: const BorderSide(color: Color(0xFFE2E8F0)),
                         ),
-                        IconButton(
-                          tooltip: DevicePreviewScope.of(context).mobilePreview ? 'Desktop preview' : 'Mobile preview',
-                          onPressed: DevicePreviewScope.of(context).toggle,
-                          icon: Icon(DevicePreviewScope.of(context).mobilePreview ? Icons.desktop_windows_outlined : Icons.smartphone_outlined),
+                        const SizedBox(width: 8),
+                        TextButton.icon(
+                          onPressed: preview.toggle,
+                          icon: Icon(mobilePreview ? Icons.desktop_windows_outlined : Icons.phone_iphone_outlined, size: 17),
+                          label: Text(mobilePreview ? 'Desktop view' : 'Mobile preview'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFF334155),
+                            backgroundColor: const Color(0xFFF8FAFC),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
                         ),
-                        IconButton(tooltip: 'Download project ZIP', onPressed: onExportProject, icon: const Icon(Icons.archive_outlined)),
                         if (compact)
                           IconButton(tooltip: 'Sign out', onPressed: onLogout, icon: const Icon(Icons.logout, size: 19))
                         else
@@ -201,41 +207,27 @@ class GlobalCommandBar extends StatelessWidget implements PreferredSizeWidget {
       };
 }
 
-void showProjectExportDialog(BuildContext context) {
-  showDialog<void>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Project source'),
-      content: const Text(
-        'The Flutter, Flask, and MySQL source lives in this workspace. '
-        'ZIP creation is not available from the current app runtime.',
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
-      ],
-    ),
-  );
-}
-
 class _CommandTab extends StatelessWidget {
   final String label;
   final IconData icon;
-  final bool selected;
   final VoidCallback onTap;
 
-  const _CommandTab({required this.label, required this.icon, required this.onTap, this.selected = false});
+  const _CommandTab({required this.label, required this.icon, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final color = selected ? const Color(0xFFE11D48) : const Color(0xFF475569);
+    const color = Color(0xFF475569);
     return Padding(
       padding: const EdgeInsets.only(right: 5),
       child: TextButton.icon(
         onPressed: onTap,
         icon: Icon(icon, size: 16, color: color),
-        label: Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+        label: Text(
+          label,
+          style: const TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w500),
+        ),
         style: TextButton.styleFrom(
-          backgroundColor: selected ? const Color(0xFFFFE4E8) : Colors.transparent,
+          backgroundColor: Colors.transparent,
           padding: const EdgeInsets.symmetric(horizontal: 10),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
         ),

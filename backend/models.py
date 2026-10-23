@@ -205,6 +205,7 @@ class DonationCertificate(db.Model):
         return {
             "id": self.id,
             "donor_id": self.donor_id,
+            "match_id": self.match_id,
             "donor_name": self.donor.full_name if self.donor else None,
             "hospital_name": self.hospital_name,
             "donation_date": self.donation_date.isoformat(),

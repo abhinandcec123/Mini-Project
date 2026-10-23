@@ -1,6 +1,16 @@
+from datetime import datetime
+
 from flask import Blueprint, request, jsonify
 from extensions import db
-from models import Hospital, Donor, BloodRequest, RequestMatch, BLOOD_GROUPS, log_action
+from models import (
+    Hospital,
+    Donor,
+    BloodRequest,
+    RequestMatch,
+    DonationCertificate,
+    BLOOD_GROUPS,
+    log_action,
+)
 from utils.security import role_required, current_user_id
 from utils.ai_matching import rank_donors_for_request
 
@@ -74,9 +84,19 @@ def ai_candidates(request_id):
     hospital = _get_current_hospital()
     max_distance = float(request.args.get("max_distance_km", 50))
 
-    donors = Donor.query.filter_by(is_active=True, is_available=True).all()
+    available_donors = Donor.query.filter_by(is_active=True, is_available=True).all()
+    unavailable_donors = Donor.query.filter_by(is_active=True, is_available=False).all()
+
     ranked = rank_donors_for_request(
-        donors, req.blood_group, hospital.latitude, hospital.longitude, max_distance
+        available_donors, req.blood_group, hospital.latitude, hospital.longitude, max_distance
+    )
+    fallback_ranked = rank_donors_for_request(
+        unavailable_donors,
+        req.blood_group,
+        hospital.latitude,
+        hospital.longitude,
+        max_distance,
+        include_unavailable=True,
     )
 
     already_matched_ids = {m.donor_id for m in req.matches}
@@ -87,7 +107,7 @@ def ai_candidates(request_id):
             "distance_km": item["distance_km"],
             "already_dispatched": item["donor"].id in already_matched_ids,
         }
-        for item in ranked
+        for item in ranked + fallback_ranked
     ]
     return jsonify(results), 200
 
@@ -129,6 +149,46 @@ def request_matches(request_id):
     if not req:
         return jsonify({"error": "Request not found"}), 404
     return jsonify([m.to_dict() for m in req.matches]), 200
+
+
+@hospital_bp.post("/requests/<int:request_id>/matches/<int:match_id>/confirm")
+@role_required("hospital")
+def confirm_donation(request_id, match_id):
+    hospital_id = current_user_id()
+    req = BloodRequest.query.filter_by(id=request_id, hospital_id=hospital_id).first()
+    if not req:
+        return jsonify({"error": "Request not found"}), 404
+
+    match = RequestMatch.query.filter_by(id=match_id, request_id=request_id).first()
+    if not match:
+        return jsonify({"error": "Match not found"}), 404
+    if match.status != "accepted":
+        return jsonify({"error": "Only accepted donations can be confirmed by the hospital"}), 400
+
+    existing_certificate = DonationCertificate.query.filter_by(match_id=match.id).first()
+    if existing_certificate:
+        return jsonify({"error": "Certificate already exists for this donation", "certificate": existing_certificate.to_dict()}), 409
+
+    donor = match.donor
+    if not donor:
+        return jsonify({"error": "Matched donor not found"}), 404
+
+    match.status = "completed"
+    req.status = "fulfilled"
+    donor.last_donation_date = datetime.utcnow()
+    donor.total_donations = (donor.total_donations or 0) + 1
+    donor.reliability_score = min(100, donor.reliability_score + 2)
+
+    cert = DonationCertificate(
+        donor_id=donor.id,
+        match_id=match.id,
+        hospital_name=req.hospital.name if req.hospital else "LifePulse Network",
+        units_donated=1,
+    )
+    db.session.add(cert)
+    db.session.commit()
+    log_action("hospital", hospital_id, "approved_donation", f"request_id={request_id}, match_id={match_id}")
+    return jsonify({"match": match.to_dict(), "certificate": cert.to_dict()}), 200
 
 
 @hospital_bp.post("/requests/<int:request_id>/cancel")
