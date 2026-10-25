@@ -10,7 +10,7 @@ import '../models/blood_request.dart';
 import '../widgets/donor_card.dart';
 import '../utils/location_format.dart';
 
-/// AI donor ranking view with an automatically advancing ranked queue.
+/// Ranked donor matching and dispatch workflow for hospital requests.
 class AiRecommendationScreen extends StatefulWidget {
   final BloodRequest request;
   const AiRecommendationScreen({super.key, required this.request});
@@ -21,27 +21,12 @@ class AiRecommendationScreen extends StatefulWidget {
 
 class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
   bool _loading = true;
+  bool _dispatching = false;
   String? _error;
   List<dynamic> _candidates = [];
   Map<String, dynamic>? _hospitalProfile;
   double _maxDistance = 50;
   final List<double> _weights = [35, 30, 20, 15];
-
-  void _setWeight(int index, double value) {
-    setState(() {
-      final remaining = 100 - value;
-      final otherIndices =
-          List.generate(4, (i) => i).where((i) => i != index).toList();
-      final otherTotal =
-          otherIndices.fold<double>(0, (sum, i) => sum + _weights[i]);
-      _weights[index] = value;
-      for (final i in otherIndices) {
-        _weights[i] = otherTotal == 0
-            ? remaining / 3
-            : _weights[i] / otherTotal * remaining;
-      }
-    });
-  }
 
   double _score(Map<String, dynamic> candidate) {
     final rankedScore = (candidate['score'] as num?)?.toDouble();
@@ -66,20 +51,10 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
       if (aPending != bPending) return aPending ? -1 : 1;
       return 0;
     }
+
     candidates.sort((a, b) {
       final byQueue = pendingFirst(a, b);
       if (byQueue != 0) return byQueue;
-      if (widget.request.priority == 'critical') {
-        final aDistance = (a['distance_km'] as num?)?.toDouble();
-        final bDistance = (b['distance_km'] as num?)?.toDouble();
-        if (aDistance == null && bDistance == null) {
-          return _score(b).compareTo(_score(a));
-        }
-        if (aDistance == null) return 1;
-        if (bDistance == null) return -1;
-        final byDistance = aDistance.compareTo(bDistance);
-        return byDistance != 0 ? byDistance : _score(b).compareTo(_score(a));
-      }
       return _score(b).compareTo(_score(a));
     });
     return candidates;
@@ -116,6 +91,32 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
     }
   }
 
+  Future<void> _dispatchTopTen() async {
+    setState(() => _dispatching = true);
+    try {
+      final api = context.read<AuthProvider>().api;
+      final result = await api.post(
+        '/hospital/requests/${widget.request.id}/dispatch-ranked',
+        body: {'max_distance_km': _maxDistance},
+      );
+      if (!mounted) return;
+      final count = (result['dispatched_count'] as num?)?.toInt() ?? 0;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(count == 0
+            ? 'No eligible live-map donors found within ${_maxDistance.round()} km.'
+            : 'Donation request sent to the top $count ranked donor${count == 1 ? '' : 's'}.'),
+      ));
+      await _load();
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _dispatching = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -134,6 +135,58 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
                         radiusKm: _maxDistance,
                       ),
                       const SizedBox(height: 16),
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Search radius: ${_maxDistance.round()} km',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700)),
+                              Slider(
+                                value: _maxDistance,
+                                min: 5,
+                                max: 50,
+                                divisions: 9,
+                                label: '${_maxDistance.round()} km',
+                                onChanged: (value) =>
+                                    setState(() => _maxDistance = value),
+                                onChangeEnd: (_) => _load(),
+                              ),
+                              const Text(
+                                  'Available, eligible live-map donors with GPS or test pins are ranked by compatibility, distance, and reliability.',
+                                  style: TextStyle(
+                                      fontSize: 12, color: Color(0xFF475569))),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      FilledButton.icon(
+                        onPressed: _dispatching ||
+                                _rankedCandidates
+                                    .any((c) => c['match_status'] != null)
+                            ? null
+                            : _dispatchTopTen,
+                        icon: _dispatching
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.send),
+                        label: Text(_dispatching
+                            ? 'Sending requests…'
+                            : 'Send request to top 10 ranked donors'),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                          'Applies to ${widget.request.priority} requests · eligible live-map donors only · up to 10 offers sent together',
+                          style: const TextStyle(
+                              fontSize: 11, color: Color(0xFF64748B))),
+                      const SizedBox(height: 16),
                       if (_rankedCandidates.isEmpty)
                         const _NoCandidates()
                       else ...[
@@ -143,8 +196,9 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
                         ),
                         const SizedBox(height: 10),
                         const Text(
-                          'Ranked dispatch contacts one donor at a time. If they decline or do not respond, the next donor is contacted automatically.',
-                          style: TextStyle(fontSize: 12, color: Color(0xFF475569)),
+                          'Requests go to the top ten ranked donors at the same time. Donors can accept or decline; the hospital confirms each completed donation.',
+                          style:
+                              TextStyle(fontSize: 12, color: Color(0xFF475569)),
                         ),
                         const SizedBox(height: 18),
                         _CandidateSpotlight(
@@ -160,7 +214,9 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
                                 fontWeight: FontWeight.w800,
                                 color: Color(0xFF64748B))),
                         const SizedBox(height: 8),
-                        for (var i = 1; i < _rankedCandidates.length; i++)
+                        for (var i = 1;
+                            i < math.min(10, _rankedCandidates.length);
+                            i++)
                           DonorRankCard(
                             donor:
                                 Donor.fromJson(_rankedCandidates[i]['donor']),
@@ -168,7 +224,8 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
                             distanceKm:
                                 (_rankedCandidates[i]['distance_km'] as num?)
                                     ?.toDouble(),
-                            matchStatus: _rankedCandidates[i]['match_status']?.toString(),
+                            matchStatus: _rankedCandidates[i]['match_status']
+                                ?.toString(),
                           ),
                       ],
                     ],
@@ -309,12 +366,8 @@ class _CandidateGeoMap extends StatelessWidget {
     for (var i = 0; i < candidates.length; i++) {
       final candidate = candidates[i];
       final donor = Donor.fromJson(candidate['donor']);
-      var latitude = donor.latitude;
-      var longitude = donor.longitude;
-      if (latitude == null || longitude == null) {
-        latitude = donor.effectiveLatitude;
-        longitude = donor.effectiveLongitude;
-      }
+      var latitude = donor.effectiveLatitude;
+      var longitude = donor.effectiveLongitude;
       if (latitude != null && longitude != null) {
         donorPoints.add((i, LatLng(latitude, longitude)));
       }
@@ -323,8 +376,7 @@ class _CandidateGeoMap extends StatelessWidget {
     final hospitalLatitude = (hospitalProfile?['latitude'] as num?)?.toDouble();
     final hospitalLongitude =
         (hospitalProfile?['longitude'] as num?)?.toDouble();
-    final hospitalPoint = hospitalLatitude != null &&
-            hospitalLongitude != null
+    final hospitalPoint = hospitalLatitude != null && hospitalLongitude != null
         ? LatLng(hospitalLatitude, hospitalLongitude)
         : null;
     final points = [
@@ -338,8 +390,8 @@ class _CandidateGeoMap extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           child: Text(
             hospitalPoint == null
-                ? 'Add a hospital location and donor registered-area coordinates to show them on the map.'
-                : 'No matched donors have registered-area coordinates yet.',
+                ? 'Set the hospital location and make donor GPS or test pins available to show matches on the map.'
+                : 'No eligible donors with live-map pins were found.',
             style: const TextStyle(color: Color(0xFF475569)),
           ),
         ),
@@ -357,7 +409,7 @@ class _CandidateGeoMap extends StatelessWidget {
         const Padding(
           padding: EdgeInsets.only(bottom: 8),
           child: Text(
-            'Registered-area pins · Red: hospital · Teal: top candidate · Amber: other candidates',
+            'Live GPS / test pins · Red: hospital · Teal: top candidate · Amber: other candidates',
             style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
           ),
         ),
@@ -547,7 +599,8 @@ class _CandidateSpotlight extends StatelessWidget {
               child: OutlinedButton.icon(
                 onPressed: null,
                 icon: const Icon(Icons.autorenew, size: 17),
-                label: Text(_queueStatus(candidate['match_status']?.toString())),
+                label:
+                    Text(_queueStatus(candidate['match_status']?.toString())),
               ),
             ),
           ],

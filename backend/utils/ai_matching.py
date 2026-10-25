@@ -28,13 +28,14 @@ def score_donor(donor, request_lat, request_lng, max_distance_km=50, include_una
     if not donor.is_eligible_now():
         return None, None
 
-    # Use registered area coordinates for distance; precise GPS is optional.
-    donor_lat = getattr(donor, "registered_latitude", None)
-    donor_lng = getattr(donor, "registered_longitude", None)
-    if donor_lat is None:
-        donor_lat = donor.latitude
-    if donor_lng is None:
-        donor_lng = donor.longitude
+    # Emergency matching uses the same opted-in, available live location shown
+    # on the admin map (including explicitly saved test pins).
+    if not donor.is_available or not donor.location_sharing_enabled:
+        return None, None
+    donor_lat = donor.gps_latitude
+    donor_lng = donor.gps_longitude
+    if donor_lat is None or donor_lng is None:
+        return None, None
     distance = haversine_km(donor_lat, donor_lng, request_lat, request_lng)
 
     if distance is None:

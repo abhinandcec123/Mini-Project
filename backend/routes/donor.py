@@ -52,12 +52,17 @@ def toggle_availability():
     is_available = data.get("is_available", not donor.is_available)
     if not isinstance(is_available, bool):
         return jsonify({"error": "is_available must be a boolean"}), 400
-    if is_available and not (
-        donor.location_sharing_enabled
-        and donor.gps_latitude is not None
-        and donor.gps_longitude is not None
-    ):
-        return jsonify({"error": "Share your GPS location or choose a test pin before becoming available"}), 409
+    if is_available:
+        if not donor.is_eligible_now():
+            return jsonify({"error": "You must wait until the 90-day donation interval has passed before becoming available"}), 409
+        if RequestMatch.query.filter_by(donor_id=donor.id, status="accepted").first():
+            return jsonify({"error": "You already accepted a donation request"}), 409
+        if not (
+            donor.location_sharing_enabled
+            and donor.gps_latitude is not None
+            and donor.gps_longitude is not None
+        ):
+            return jsonify({"error": "Share your GPS location or choose a test pin before becoming available"}), 409
 
     donor.is_available = is_available
     if not is_available:
@@ -179,6 +184,7 @@ def accept_request(match_id):
 
     match.status = "accepted"
     match.responded_at = datetime.utcnow()
+    donor.is_available = False
     next_requests = {match.request_id}
     other_pending = RequestMatch.query.filter(
         RequestMatch.donor_id == donor_id,
