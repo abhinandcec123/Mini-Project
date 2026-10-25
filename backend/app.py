@@ -87,9 +87,6 @@ def create_app(config_override=None):
                 db.session.execute(text(
                     f"ALTER TABLE {table_name} ADD COLUMN password_version INTEGER NOT NULL DEFAULT 0"
                 ))
-        db.session.execute(text(
-            "UPDATE donors SET is_available = FALSE WHERE location_sharing_enabled = FALSE"
-        ))
         db.session.commit()
 
     return app

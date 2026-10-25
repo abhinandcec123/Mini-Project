@@ -6,8 +6,16 @@ This folder contains the Flutter app source and its Android project.
 
 Install Flutter and Android Studio with the Android SDK, Android SDK
 Command-line Tools, and an emulator or Android device. From this `frontend/`
-directory, run `flutter pub get` and then `flutter run` with the backend
-running. Android Studio can open this directory directly.
+directory, run `flutter pub get` and then start a local development build with
+the backend running:
+
+```bash
+flutter run --dart-define=ALLOW_INSECURE_HTTP=true
+```
+
+The local API uses HTTP, so this opt-in is required for development. For a
+release build, configure an HTTPS API URL with `API_BASE_URL` instead; do not
+enable `ALLOW_INSECURE_HTTP`. Android Studio can open this directory directly.
 
 ## Connecting to the backend
 

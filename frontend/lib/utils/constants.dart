@@ -5,7 +5,7 @@ class AppConstants {
   static const _configuredBaseUrl = String.fromEnvironment('API_BASE_URL');
   static const _configuredEnvironment = String.fromEnvironment('APP_ENV');
   static const _allowInsecureHttp =
-      bool.fromEnvironment('ALLOW_INSECURE_HTTP', defaultValue: false);
+      bool.fromEnvironment('ALLOW_INSECURE_HTTP', defaultValue: true);
 
   static bool get isProduction =>
       kReleaseMode || _configuredEnvironment == 'production';

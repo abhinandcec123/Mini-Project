@@ -1,6 +1,8 @@
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:file_saver/file_saver.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
@@ -113,14 +115,44 @@ class CertificateService {
     return document.save();
   }
 
-  static Future<void> download(Map<String, dynamic> certificate) async {
+  static Future<String?> download(Map<String, dynamic> certificate) async {
     final certificateId = certificate['id']?.toString() ?? 'N/A';
-    await FileSaver.instance.saveFile(
-      name: 'LifePulse_Donation_Certificate_$certificateId',
-      bytes: await buildPdf(certificate),
-      fileExtension: 'pdf',
-      mimeType: MimeType.custom,
-      customMimeType: 'application/pdf',
-    );
+    final fileName = 'LifePulse_Donation_Certificate_$certificateId';
+    final bytes = await buildPdf(certificate);
+
+    // On desktop (Windows/macOS/Linux) and web use saveAs() which opens the
+    // native file-picker dialog so the user can choose where to save and gets
+    // immediate confirmation the file landed.  On mobile (Android/iOS) use
+    // saveFile() which writes straight to the Downloads folder (Android) or
+    // the app-accessible documents directory (iOS).
+    final bool useDialog = kIsWeb ||
+        (!kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux));
+
+    try {
+      if (useDialog) {
+        return await FileSaver.instance.saveAs(
+          name: fileName,
+          bytes: bytes,
+          fileExtension: 'pdf',
+          mimeType: MimeType.pdf,
+        );
+      } else {
+        return await FileSaver.instance.saveFile(
+          name: fileName,
+          bytes: bytes,
+          fileExtension: 'pdf',
+          mimeType: MimeType.pdf,
+        );
+      }
+    } catch (_) {
+      // Final fallback: plain saveFile with custom MIME type.
+      return await FileSaver.instance.saveFile(
+        name: fileName,
+        bytes: bytes,
+        fileExtension: 'pdf',
+        mimeType: MimeType.custom,
+        customMimeType: 'application/pdf',
+      );
+    }
   }
 }

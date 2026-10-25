@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
@@ -28,11 +29,33 @@ class _DonorPortalScreenState extends State<DonorPortalScreen> {
   bool _locationBusy = false;
   LatLng? _selectedTestPin;
   final Set<String> _downloadingCertificates = {};
+  Timer? _requestRefreshTimer;
 
   @override
   void initState() {
     super.initState();
     _loadAll();
+    _requestRefreshTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      _refreshIncomingRequests();
+    });
+  }
+
+  @override
+  void dispose() {
+    _requestRefreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refreshIncomingRequests() async {
+    try {
+      final result = await context.read<AuthProvider>().api.get('/donor/requests');
+      if (mounted) {
+        setState(() => _matches =
+            (result as List).map((e) => RequestMatch.fromJson(e)).toList());
+      }
+    } catch (_) {
+      // Keep the last displayed requests; the next poll can refresh them.
+    }
   }
 
   Future<void> _loadAll() async {
@@ -182,11 +205,13 @@ class _DonorPortalScreenState extends State<DonorPortalScreen> {
     final certificateId = certificate['id'].toString();
     setState(() => _downloadingCertificates.add(certificateId));
     try {
-      await CertificateService.download({
+      final savedPath = await CertificateService.download({
         ...certificate,
         'donor_name': _profile?['full_name'] ?? 'LifePulse donor',
       });
-      _showSnack('Donation certificate downloaded.');
+      _showSnack(savedPath == null || savedPath.isEmpty
+          ? 'Certificate saved to your Downloads folder.'
+          : 'Certificate saved: $savedPath');
     } catch (e) {
       _showSnack('Could not download certificate: $e');
     } finally {
@@ -203,7 +228,7 @@ class _DonorPortalScreenState extends State<DonorPortalScreen> {
       _showSnack(action == 'accept'
           ? 'Request accepted — thank you!'
           : 'Request declined.');
-      _loadAll();
+      await _loadAll();
     } on ApiException catch (e) {
       _showSnack(e.message);
     }
@@ -432,53 +457,12 @@ class _VitalsAndImpactPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                const Expanded(
-                  child: Text('Health & impact',
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFF7ED),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Text('SAMPLE VITALS',
-                      style: TextStyle(
-                          color: Color(0xFFB45309),
-                          fontSize: 9,
-                          fontWeight: FontWeight.w800)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            const Text('Illustrative values only; not a medical record.',
-                style: TextStyle(color: Color(0xFF64748B), fontSize: 11)),
-            const SizedBox(height: 14),
-            const Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _VitalTile(
-                    label: 'Hemoglobin',
-                    value: '14.8',
-                    unit: 'g/dL',
-                    icon: Icons.bloodtype_outlined),
-                _VitalTile(
-                    label: 'Blood pressure',
-                    value: '120/80',
-                    unit: 'mmHg',
-                    icon: Icons.monitor_heart_outlined),
-                _VitalTile(
-                    label: 'Weight',
-                    value: '--',
-                    unit: 'not on file',
-                    icon: Icons.monitor_weight_outlined),
-              ],
-            ),
+            const Text('Eligibility & Donation History',
+                style:
+                    TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            const Text('Official donor tracking for LifePulse emergency requests.',
+                style: TextStyle(color: Color(0xFF64748B), fontSize: 12)),
             const SizedBox(height: 14),
             Wrap(
               spacing: 8,
@@ -496,55 +480,15 @@ class _VitalsAndImpactPanel extends StatelessWidget {
                       ? 'Eligible now'
                       : '$recoveryDays recovery day(s) remaining',
                 ),
-                const _ImpactPill(
+                _ImpactPill(
                     icon: Icons.favorite_border,
-                    label: 'Lives supported: tracked after completion'),
+                    label: donations > 0
+                        ? 'Est. lives impacted: ${donations * 3}'
+                        : 'First donation will support up to 3 lives'),
               ],
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _VitalTile extends StatelessWidget {
-  final String label;
-  final String value;
-  final String unit;
-  final IconData icon;
-
-  const _VitalTile(
-      {required this.label,
-      required this.value,
-      required this.unit,
-      required this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 145,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 17, color: const Color(0xFFE11D48)),
-          const SizedBox(height: 10),
-          Text(value,
-              style:
-                  const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
-          Text(unit,
-              style: const TextStyle(color: Color(0xFF64748B), fontSize: 10)),
-          const SizedBox(height: 4),
-          Text(label,
-              style:
-                  const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
-        ],
       ),
     );
   }
@@ -638,7 +582,6 @@ class _DonorTopBar extends StatelessWidget {
     return GlobalCommandBar(
       role: 'donor',
       profileName: profile?['full_name'] ?? 'Donor Portal',
-      onExportProject: () => showProjectExportDialog(context),
       onSwitchRole: (role) {
         if (role != 'donor') onSignOut();
       },

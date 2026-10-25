@@ -6,7 +6,6 @@ import 'screens/donor_portal_screen.dart';
 import 'screens/hospital_dashboard_screen.dart';
 import 'screens/admin_dashboard_screen.dart';
 import 'screens/change_password_screen.dart';
-import 'widgets/global_command_bar.dart';
 
 void main() {
   runApp(const LifePulseApp());
@@ -77,7 +76,7 @@ class LifePulseApp extends StatelessWidget {
             ),
           ),
         ),
-        home: const DevicePreviewHost(child: _RootRouter()),
+        home: const _RootRouter(),
       ),
     );
   }

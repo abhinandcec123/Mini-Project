@@ -67,6 +67,15 @@ class Donor(db.Model):
     def effective_longitude(self):
         return self.gps_longitude if self.location_sharing_enabled and self.is_available else None
 
+    @property
+    def registered_latitude(self):
+        """Approximate registered location used for matching and map markers."""
+        return self.fallback_latitude if self.fallback_latitude is not None else self.latitude
+
+    @property
+    def registered_longitude(self):
+        return self.fallback_longitude if self.fallback_longitude is not None else self.longitude
+
     def is_eligible_now(self):
         """A donor must wait ~90 days between whole-blood donations."""
         if not self.last_donation_date:
@@ -81,19 +90,17 @@ class Donor(db.Model):
             "age": self.age,
             "gender": self.gender,
             "city": self.city,
-            "latitude": self.latitude if include_contact else self.effective_latitude,
-            "longitude": self.longitude if include_contact else self.effective_longitude,
+            "latitude": self.latitude if include_contact else self.registered_latitude,
+            "longitude": self.longitude if include_contact else self.registered_longitude,
             "fallback_latitude": self.fallback_latitude if include_contact else None,
             "fallback_longitude": self.fallback_longitude if include_contact else None,
+            "registered_latitude": self.registered_latitude,
+            "registered_longitude": self.registered_longitude,
             "current_latitude": self.effective_latitude,
             "current_longitude": self.effective_longitude,
             "effective_latitude": self.effective_latitude,
             "effective_longitude": self.effective_longitude,
-            "location_source": (
-                self.gps_location_source
-                if self.effective_latitude is not None
-                else None
-            ),
+            "location_source": self.location_source,
             "location_accuracy_m": self.gps_accuracy_m if self.effective_latitude is not None else None,
             "location_sharing_enabled": self.location_sharing_enabled and self.is_available,
             "is_available": self.is_available,
@@ -240,6 +247,7 @@ class RequestMatch(db.Model):
             "request": self.request.to_dict() if self.request else None,
             "donor": self.donor.to_dict(include_contact=False) if self.donor else None,
             "donor_id": self.donor_id,
+            "donor_name": self.donor.full_name if self.donor else None,
             "match_score": self.match_score,
             "distance_km": self.distance_km,
             "status": self.status,
@@ -266,6 +274,7 @@ class DonationCertificate(db.Model):
             "donor_id": self.donor_id,
             "match_id": self.match_id,
             "donor_name": self.donor.full_name if self.donor else None,
+            "blood_group": self.donor.blood_group if self.donor else None,
             "hospital_name": self.hospital_name,
             "donation_date": self.donation_date.isoformat(),
             "units_donated": self.units_donated,

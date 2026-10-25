@@ -9,13 +9,14 @@ from models import (
     Hospital,
     RequestMatch,
 )
+from db_config import TEST_DATABASE_URI
 
 
 class HospitalDonationApprovalTests(unittest.TestCase):
     def setUp(self):
         self.app = create_app({
             "TESTING": True,
-            "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+            "SQLALCHEMY_DATABASE_URI": TEST_DATABASE_URI,
             "JWT_SECRET_KEY": "test-secret-key-with-at-least-32-bytes",
         })
         self.client = self.app.test_client()

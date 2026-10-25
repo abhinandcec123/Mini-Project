@@ -10,6 +10,7 @@ from models import (
     log_action,
 )
 from utils.security import role_required, current_user_id
+from utils.dispatch_queue import advance_ranked_queues, expire_stale_dispatches
 
 donor_bp = Blueprint("donor", __name__, url_prefix="/api/donor")
 
@@ -144,6 +145,7 @@ def update_test_pin():
 def incoming_requests():
     """All emergency requests dispatched to this donor, newest first."""
     donor_id = current_user_id()
+    expire_stale_dispatches(donor_id=donor_id)
     matches = (
         RequestMatch.query.filter_by(donor_id=donor_id)
         .order_by(RequestMatch.dispatched_at.desc())
@@ -161,11 +163,35 @@ def accept_request(match_id):
         return jsonify({"error": "Request not found"}), 404
     if match.status != "pending":
         return jsonify({"error": f"This request was already {match.status}"}), 400
+    if not match.request or match.request.status != "open":
+        match.status = "declined"
+        match.responded_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({"error": "This blood request is no longer open."}), 409
+
+    donor = Donor.query.filter_by(id=donor_id).with_for_update().first()
+    active_acceptance = RequestMatch.query.filter(
+        RequestMatch.donor_id == donor_id,
+        RequestMatch.status.in_(("accepted", "completed")),
+    ).first()
+    if active_acceptance:
+        return jsonify({"error": "You already have an accepted donation in progress."}), 409
 
     match.status = "accepted"
     match.responded_at = datetime.utcnow()
+    next_requests = {match.request_id}
+    other_pending = RequestMatch.query.filter(
+        RequestMatch.donor_id == donor_id,
+        RequestMatch.id != match.id,
+        RequestMatch.status == "pending",
+    ).all()
+    for other in other_pending:
+        other.status = "declined"
+        other.responded_at = datetime.utcnow()
+        next_requests.add(other.request_id)
     db.session.commit()
     log_action("donor", donor_id, "accepted_request", f"match_id={match_id}")
+    advance_ranked_queues(next_requests)
     return jsonify(match.to_dict()), 200
 
 
@@ -183,6 +209,7 @@ def decline_request(match_id):
     match.responded_at = datetime.utcnow()
     db.session.commit()
     log_action("donor", donor_id, "declined_request", f"match_id={match_id}")
+    advance_ranked_queues({match.request_id})
     return jsonify(match.to_dict()), 200
 
 

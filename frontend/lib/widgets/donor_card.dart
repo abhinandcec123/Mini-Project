@@ -2,28 +2,40 @@ import 'package:flutter/material.dart';
 import '../models/donor.dart';
 import '../utils/location_format.dart';
 
-/// A ranked donor row in the AI Recommendation view, with score + distance
-/// and a "Send Request" action (mirrors the original AIRecommendationView).
+/// A ranked donor row with score, distance, and automated queue status.
 class DonorRankCard extends StatelessWidget {
   final Donor donor;
   final double score;
   final double? distanceKm;
-  final bool alreadyDispatched;
-  final VoidCallback onDispatch;
+  final String? matchStatus;
 
   const DonorRankCard({
     super.key,
     required this.donor,
     required this.score,
     required this.distanceKm,
-    required this.alreadyDispatched,
-    required this.onDispatch,
+    this.matchStatus,
   });
 
   Color get _scoreColor {
     if (score >= 75) return Colors.green.shade700;
     if (score >= 50) return Colors.orange.shade700;
     return Colors.blueGrey;
+  }
+
+  String get _queueLabel {
+    switch (matchStatus) {
+      case 'pending':
+        return 'Awaiting response';
+      case 'accepted':
+        return 'Accepted';
+      case 'declined':
+        return 'Declined';
+      case 'completed':
+        return 'Completed';
+      default:
+        return 'Up next in queue';
+    }
   }
 
   @override
@@ -37,7 +49,7 @@ class DonorRankCard extends StatelessWidget {
             CircleAvatar(
               radius: 24,
               backgroundColor: _scoreColor.withValues(alpha: 0.15),
-              child: Text(score.toStringAsFixed(0),
+              child: Text(score.toStringAsFixed(1),
                   style: TextStyle(
                       color: _scoreColor, fontWeight: FontWeight.bold)),
             ),
@@ -54,19 +66,14 @@ class DonorRankCard extends StatelessWidget {
                     '${distanceKm != null ? ' • ${formatDistanceKm(distanceKm!)} away' : ''}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
-                  Text(
-                    'Reliability ${donor.reliabilityScore.toStringAsFixed(0)}%',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
                 ],
               ),
             ),
             const SizedBox(width: 8),
-            alreadyDispatched
-                ? const Chip(
-                    label: Text('Sent'), visualDensity: VisualDensity.compact)
-                : FilledButton(
-                    onPressed: onDispatch, child: const Text('Send')),
+            Chip(
+              label: Text(_queueLabel),
+              visualDensity: VisualDensity.compact,
+            ),
           ],
         ),
       ),

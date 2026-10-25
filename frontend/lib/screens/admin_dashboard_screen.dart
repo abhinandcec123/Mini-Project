@@ -25,6 +25,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   List<dynamic> _hospitals = [];
   List<dynamic> _logs = [];
   List<dynamic> _donorLocations = [];
+  Map<String, dynamic> _fulfilledData = {};
   String _donorQuery = '';
   String _hospitalQuery = '';
   bool _loading = true;
@@ -35,13 +36,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 6, vsync: this)
+    _tabController = TabController(length: 7, vsync: this)
       ..addListener(_handleTabChange);
     _loadAll();
   }
 
   void _handleTabChange() {
-    if (_tabController.index == 5) {
+    if (_tabController.index == 2) {
       _refreshDonorLocations();
       _locationRefreshTimer ??= Timer.periodic(
         const Duration(seconds: 15),
@@ -67,6 +68,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         api.get('/admin/hospitals'),
         api.get('/admin/audit-logs'),
         api.get('/admin/donor-locations'),
+        api.get('/admin/fulfilled-donations'),
       ]);
       setState(() {
         _stats = results[0];
@@ -75,6 +77,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         _hospitals = results[3];
         _logs = results[4];
         _donorLocations = results[5];
+        _fulfilledData = results[6] is Map<String, dynamic> ? results[6] as Map<String, dynamic> : {};
         _donorLocationError = null;
       });
     } on ApiException catch (e) {
@@ -131,13 +134,36 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 
+  Future<void> _openBulkAddDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _BulkAddUsersDialog(
+        onSubmit: (payload) async {
+          try {
+            await context.read<AuthProvider>().api.post(
+                  '/admin/bulk-users',
+                  body: payload,
+                );
+            if (!dialogContext.mounted) return;
+            Navigator.of(dialogContext).pop();
+            if (!mounted) return;
+            await _loadAll();
+            _showSnack('Users imported successfully');
+          } on ApiException catch (e) {
+            _showSnack(e.message);
+          }
+        },
+      ),
+    );
+  }
+
   Future<void> _removeDonor(int id) async {
     final api = context.read<AuthProvider>().api;
     final confirmed = await _confirm('Remove this donor from the network?');
     if (!confirmed) return;
     try {
       await api.delete('/admin/donors/$id');
-      _loadAll();
+      await _loadAll();
     } on ApiException catch (e) {
       _showSnack(e.message);
     }
@@ -149,7 +175,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     if (!confirmed) return;
     try {
       await api.delete('/admin/hospitals/$id');
-      _loadAll();
+      await _loadAll();
     } on ApiException catch (e) {
       _showSnack(e.message);
     }
@@ -293,9 +319,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         onLogout: () => context.read<AuthProvider>().logout(),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openAddHospitalDialog(),
-        icon: const Icon(Icons.add_business_outlined),
-        label: const Text('Add Hospital'),
+        heroTag: 'bulk_add_btn',
+        onPressed: () => _openBulkAddDialog(),
+        icon: const Icon(Icons.group_add_outlined),
+        label: const Text('Bulk Add (CSV)'),
+        backgroundColor: const Color(0xFF0F172A),
+        foregroundColor: Colors.white,
       ),
       body: Column(
         children: [
@@ -306,6 +335,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
               isScrollable: true,
               tabs: const [
                 Tab(text: 'Overview'),
+                Tab(text: 'Fulfilled Donations'),
                 Tab(text: 'Live Donor Map'),
                 Tab(text: 'Donor Registry'),
                 Tab(text: 'Hospital Network'),
@@ -323,6 +353,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                         controller: _tabController,
                         children: [
                           _buildOverview(),
+                          _buildFulfilledDonations(),
                           _buildDonorMap(),
                           _buildDonors(),
                           _buildHospitals(),
@@ -364,12 +395,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             children: [
               const Expanded(
                 child: Text(
-                  'Available, opted-in donors',
+                  'Registered donor locations',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                 ),
               ),
               IconButton(
-                tooltip: 'Refresh shared locations',
+                tooltip: 'Refresh donor locations',
                 onPressed: _refreshDonorLocations,
                 icon: _refreshingDonorLocations
                     ? const SizedBox(
@@ -382,7 +413,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             ],
           ),
           Text(
-            '${pins.length} shared pin(s) · refreshes every 15 seconds while this tab is open. Donors choose when to update their own location.',
+            '${pins.length} registered donor location(s) · refreshes every 15 seconds while this tab is open.',
             style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
           ),
           if (_donorLocationError != null) ...[
@@ -397,11 +428,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             pins: pins,
             height: 500,
             emptyMessage:
-                'No available donors have opted in to share a current location.',
+                'No active donors have registered coordinates.',
           ),
           const SizedBox(height: 8),
           const Text(
-            'Teal pins are GPS locations. Purple pins are donor-selected test locations.',
+            'Pins use the registered database location for each active donor.',
             style: TextStyle(color: Color(0xFF64748B), fontSize: 12),
           ),
         ],
@@ -429,10 +460,73 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   Icons.local_hospital),
               _statCard('Open Requests', '${_stats['open_requests'] ?? 0}',
                   Icons.pending_actions),
-              _statCard('Fulfilled', '${_stats['fulfilled_requests'] ?? 0}',
+              _statCard('Fulfilled Requests', '${_stats['fulfilled_requests'] ?? 0}',
                   Icons.check_circle),
+              _statCard(
+                'Completed Donations',
+                '${_fulfilledData['total_completed_donations'] ?? 0}',
+                Icons.volunteer_activism,
+              ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFulfilledDonations() {
+    final donations =
+        (_fulfilledData['completed_donations'] as List<dynamic>?) ??
+        (_fulfilledData['certificates'] as List<dynamic>?) ??
+        (_fulfilledData['completed_matches'] as List<dynamic>?) ??
+        [];
+    final locations =
+        (_fulfilledData['completed_donor_locations'] as List<dynamic>?) ?? [];
+    final pins = locations.whereType<Map<String, dynamic>>().map((donor) {
+      final latitude = (donor['latitude'] as num?)?.toDouble();
+      final longitude = (donor['longitude'] as num?)?.toDouble();
+      if (latitude == null || longitude == null) return null;
+      return SharedLocationPin(
+        point: LatLng(latitude, longitude),
+        label: '${donor['full_name']} · ${donor['blood_group']} · Completed donor',
+        color: const Color(0xFF047857),
+        icon: Icons.verified,
+      );
+    }).whereType<SharedLocationPin>().toList();
+    return RefreshIndicator(
+      onRefresh: _loadAll,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text('Completed donations (${donations.length})',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 10),
+          const Text('Recorded locations of donors with a completed donation',
+              style: TextStyle(color: Color(0xFF64748B), fontSize: 12)),
+          const SizedBox(height: 8),
+          SharedLocationMap(
+            pins: pins,
+            height: 300,
+            emptyMessage: 'Completed donors have no registered coordinates.',
+          ),
+          const SizedBox(height: 16),
+          if (donations.isEmpty)
+            const Center(child: Text('No completed donations yet.')),
+          ...donations.map((item) {
+            final donation = item as Map<String, dynamic>;
+            return Card(
+            child: ListTile(
+              leading: const CircleAvatar(child: Icon(Icons.check)),
+              title: Text(donation['donor_name']?.toString() ?? 'Donor'),
+              subtitle: Text(
+                '${donation['hospital_name'] ?? 'Hospital'}\n'
+                'Blood group: ${donation['blood_group'] ?? 'Unknown'}',
+              ),
+              isThreeLine: true,
+              trailing: Text(donation['donation_date']?.toString() ?? ''),
+            ),
+          );
+          }),
         ],
       ),
     );
@@ -548,10 +642,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       return const Center(child: Text('No donors registered yet.'));
     }
     final donors = _donors.where((donor) {
-      final query = _donorQuery.toLowerCase();
-      return donor['full_name'].toString().toLowerCase().contains(query) ||
-          donor['blood_group'].toString().toLowerCase().contains(query) ||
-          donor['city'].toString().toLowerCase().contains(query);
+      final query = _donorQuery.trim().toLowerCase();
+      if (query.isEmpty) return true;
+      return [
+        donor['full_name'], donor['blood_group'], donor['city'],
+        donor['phone'], donor['email'],
+      ].any((value) => (value ?? '').toString().toLowerCase().contains(query));
     }).toList();
     return RefreshIndicator(
       onRefresh: _loadAll,
@@ -614,13 +710,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       return const Center(child: Text('No hospitals registered yet.'));
     }
     final hospitals = _hospitals.where((hospital) {
-      final query = _hospitalQuery.toLowerCase();
-      return hospital['name'].toString().toLowerCase().contains(query) ||
-          hospital['city'].toString().toLowerCase().contains(query) ||
-          hospital['registration_number']
-              .toString()
-              .toLowerCase()
-              .contains(query);
+      final query = _hospitalQuery.trim().toLowerCase();
+      if (query.isEmpty) return true;
+      return [
+        hospital['name'], hospital['city'], hospital['registration_number'],
+        hospital['phone'], hospital['email'],
+      ].any((value) => (value ?? '').toString().toLowerCase().contains(query));
     }).toList();
     return RefreshIndicator(
       onRefresh: _loadAll,
@@ -891,6 +986,172 @@ class _AddHospitalDialogState extends State<_AddHospitalDialog> {
                   height: 16,
                   child: CircularProgressIndicator(strokeWidth: 2))
               : const Text('Save hospital'),
+        ),
+      ],
+    );
+  }
+}
+
+
+class _BulkAddUsersDialog extends StatefulWidget {
+  final Future<void> Function(Map<String, dynamic> payload) onSubmit;
+
+  const _BulkAddUsersDialog({required this.onSubmit});
+
+  @override
+  State<_BulkAddUsersDialog> createState() => _BulkAddUsersDialogState();
+}
+
+class _BulkAddUsersDialogState extends State<_BulkAddUsersDialog> {
+  int _targetType = 0; // 0 = Donors, 1 = Hospitals
+  final _csvController = TextEditingController();
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _setDonorTemplate();
+  }
+
+  void _setDonorTemplate() {
+    _csvController.text =
+        '# Name, Phone, BloodGroup, City, Age, Latitude, Longitude\n'
+        'Aarav Patel, 9876543211, O+, Mumbai, 28,,\n'
+        'Neha Sharma, 9876543212, A+, Pune, 24,,\n'
+        'Rohan Gupta, 9876543213, B+, Mumbai, 31,,\n'
+        'Priya Nair, 9876543214, AB+, Delhi, 26,,';
+  }
+
+  void _setHospitalTemplate() {
+    _csvController.text =
+        '# HospitalName, Phone, City, Address, RegistrationNumber, Latitude, Longitude\n'
+        'City Care Hospital, 9876500001, Mumbai, Andheri East, REG-CC-01,,\n'
+        'Apex Life Clinic, 9876500002, Pune, Shivaji Nagar, REG-AL-02,,';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Bulk Add Users (CSV Import)'),
+      content: SizedBox(
+        width: 580,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Add multiple users at once. Initial default password will be User@123 (prompted to change upon first sign in).',
+                style: TextStyle(color: Color(0xFF64748B), fontSize: 12),
+              ),
+              const SizedBox(height: 14),
+              SegmentedButton<int>(
+                segments: const [
+                  ButtonSegment(value: 0, label: Text('Donors (CSV)')),
+                  ButtonSegment(value: 1, label: Text('Hospitals (CSV)')),
+                ],
+                selected: {_targetType},
+                onSelectionChanged: (selection) {
+                  setState(() {
+                    _targetType = selection.first;
+                    if (_targetType == 0) {
+                      _setDonorTemplate();
+                    } else {
+                      _setHospitalTemplate();
+                    }
+                  });
+                },
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _csvController,
+                maxLines: 9,
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  labelText: _targetType == 0
+                      ? 'CSV: Name, Phone, BloodGroup, City, Age, Latitude, Longitude (optional)'
+                      : 'CSV: Name, Phone, City, Address, RegistrationNumber, Latitude, Longitude (optional)',
+                  hintText: 'Paste comma-separated rows here...',
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Lines starting with # are ignored. Phone numbers must be 10 digits. Use coordinates or configure backend geocoding to place donors on the map.',
+                style: TextStyle(color: Color(0xFF64748B), fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton.icon(
+          onPressed: _submitting
+              ? null
+              : () async {
+                  setState(() => _submitting = true);
+                  final lines = _csvController.text
+                      .split('\n')
+                      .map((l) => l.trim())
+                      .where((l) => l.isNotEmpty && !l.startsWith('#'))
+                      .toList();
+
+                  final donors = <Map<String, dynamic>>[];
+                  final hospitals = <Map<String, dynamic>>[];
+
+                  for (final line in lines) {
+                    final parts = line.split(',').map((p) => p.trim()).toList();
+                    if (_targetType == 0) {
+                      if (parts.length >= 3) {
+                        donors.add({
+                          'full_name': parts[0],
+                          'phone': parts[1],
+                          'blood_group': parts[2],
+                          'city': parts.length > 3 ? parts[3] : '',
+                          'age': parts.length > 4 ? int.tryParse(parts[4]) ?? 25 : 25,
+                          if (parts.length > 5 && parts[5].isNotEmpty)
+                            'latitude': double.tryParse(parts[5]),
+                          if (parts.length > 6 && parts[6].isNotEmpty)
+                            'longitude': double.tryParse(parts[6]),
+                          'password': 'User@123',
+                        });
+                      }
+                    } else {
+                      if (parts.length >= 2) {
+                        hospitals.add({
+                          'name': parts[0],
+                          'phone': parts[1],
+                          'city': parts.length > 2 ? parts[2] : '',
+                          'address': parts.length > 3 ? parts[3] : '',
+                          'registration_number': parts.length > 4 ? parts[4] : '',
+                          if (parts.length > 5 && parts[5].isNotEmpty)
+                            'latitude': double.tryParse(parts[5]),
+                          if (parts.length > 6 && parts[6].isNotEmpty)
+                            'longitude': double.tryParse(parts[6]),
+                          'password': 'User@123',
+                        });
+                      }
+                    }
+                  }
+
+                  final payload = {
+                    'donors': donors,
+                    'hospitals': hospitals,
+                  };
+
+                  await widget.onSubmit(payload);
+                  if (mounted) setState(() => _submitting = false);
+                },
+          icon: _submitting
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                )
+              : const Icon(Icons.upload_file),
+          label: const Text('Import CSV'),
         ),
       ],
     );

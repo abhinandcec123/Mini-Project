@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
@@ -26,7 +24,6 @@ class _HospitalDashboardScreenState extends State<HospitalDashboardScreen> {
   List<BloodRequest> _requests = [];
   Map<String, dynamic>? _hospitalProfile;
   String? _priorityFilter;
-  final GlobalKey _radarKey = GlobalKey();
   bool _locationBusy = false;
 
   @override
@@ -109,15 +106,10 @@ class _HospitalDashboardScreenState extends State<HospitalDashboardScreen> {
         role: 'hospital',
         profileName: user?['name'] ?? 'Hospital ER',
         onNewRequest: _openCreateModal,
-        onExportProject: () => showProjectExportDialog(context),
         onSwitchRole: (role) {
           if (role != 'hospital') context.read<AuthProvider>().logout();
         },
         onLogout: () => context.read<AuthProvider>().logout(),
-        onShowRadar: () => Scrollable.ensureVisible(
-          _radarKey.currentContext!,
-          duration: const Duration(milliseconds: 300),
-        ),
         onShowAlgorithm: _requests.isEmpty
             ? null
             : () => Navigator.of(context).push(MaterialPageRoute(
@@ -171,8 +163,6 @@ class _HospitalDashboardScreenState extends State<HospitalDashboardScreen> {
                               onSetLocation: _setHospitalLocation,
                             ),
                             const SizedBox(height: 14),
-                            _GeodesicRadar(key: _radarKey),
-                            const SizedBox(height: 22),
                             Row(
                               children: [
                                 const Expanded(
@@ -306,19 +296,6 @@ class _FacilitySummary extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            const Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                _FacilityDetail(
-                    icon: Icons.workspace_premium_outlined,
-                    label: 'Trauma tier not on file'),
-                _FacilityDetail(
-                    icon: Icons.phone_in_talk_outlined,
-                    label: '24/7 helpline not configured'),
-              ],
-            ),
             const SizedBox(height: 18),
             Wrap(
               spacing: 16,
@@ -328,16 +305,10 @@ class _FacilitySummary extends StatelessWidget {
                     label: 'Active requests',
                     value: '$activeRequests',
                     icon: Icons.bloodtype_outlined),
-                const _MetricValue(
-                    label: 'Nearby compatible',
-                    value: '--',
-                    icon: Icons.people_outline),
                 _MetricValue(
                     label: 'Units en route',
                     value: '$unitsRequested',
                     icon: Icons.local_shipping_outlined),
-                const _MetricValue(
-                    label: 'Average ETA', value: '--', icon: Icons.schedule),
               ],
             ),
           ],
@@ -400,8 +371,7 @@ class _HospitalLocationCard extends StatelessWidget {
         padding: const EdgeInsets.all(14),
         child: Row(
           children: [
-            const Icon(Icons.local_hospital_outlined,
-                color: Color(0xFFCF2349)),
+            const Icon(Icons.local_hospital_outlined, color: Color(0xFFCF2349)),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -454,172 +424,6 @@ class _FacilityDetail extends StatelessWidget {
       ),
     );
   }
-}
-
-class _GeodesicRadar extends StatefulWidget {
-  const _GeodesicRadar({super.key});
-
-  @override
-  State<_GeodesicRadar> createState() => _GeodesicRadarState();
-}
-
-class _GeodesicRadarState extends State<_GeodesicRadar>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _sweep;
-
-  @override
-  void initState() {
-    super.initState();
-    _sweep =
-        AnimationController(vsync: this, duration: const Duration(seconds: 5))
-          ..repeat();
-  }
-
-  @override
-  void dispose() {
-    _sweep.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 250,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: const Color(0xFF020617),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF1E293B)),
-      ),
-      child: Stack(
-        children: [
-          const Positioned(
-            left: 18,
-            top: 16,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('DONOR RADAR',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700)),
-                SizedBox(height: 3),
-                Text('DEMO RADAR · 5 / 15 / 30 / 50 km',
-                    style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11)),
-              ],
-            ),
-          ),
-          Center(
-            child: AnimatedBuilder(
-              animation: _sweep,
-              builder: (context, _) => SizedBox(
-                width: 220,
-                height: 220,
-                child:
-                    CustomPaint(painter: _RadarPainter(progress: _sweep.value)),
-              ),
-            ),
-          ),
-          const Positioned(
-            right: 16,
-            bottom: 12,
-            child: Wrap(
-              children: [
-                _RadarLegend(color: Color(0xFF06B6D4), label: 'Exact match'),
-                SizedBox(width: 10),
-                _RadarLegend(color: Color(0xFFD97706), label: 'Compatible'),
-                SizedBox(width: 10),
-                Text('Illustrative pins',
-                    style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RadarLegend extends StatelessWidget {
-  final Color color;
-  final String label;
-
-  const _RadarLegend({required this.color, required this.label});
-
-  @override
-  Widget build(BuildContext context) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.circle, size: 7, color: color),
-          const SizedBox(width: 4),
-          Text(label,
-              style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 9)),
-        ],
-      );
-}
-
-class _RadarPainter extends CustomPainter {
-  final double progress;
-
-  const _RadarPainter({required this.progress});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2 + 5);
-    final radius = size.width * 0.40;
-    final ringPaint = Paint()
-      ..color = const Color(0xFF164E63)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-    for (var ring = 1; ring <= 4; ring++) {
-      canvas.drawCircle(center, radius * ring / 4, ringPaint);
-    }
-    final pinOffsets = [
-      const Offset(-0.55, -0.15),
-      const Offset(0.55, -0.38),
-      const Offset(0.2, 0.63),
-      const Offset(-0.18, 0.32),
-      const Offset(0.78, 0.1),
-    ];
-    final pinColors = [
-      const Color(0xFF06B6D4),
-      const Color(0xFFD97706),
-      const Color(0xFF06B6D4),
-      const Color(0xFFD97706),
-      const Color(0xFF06B6D4),
-    ];
-    for (var i = 0; i < pinOffsets.length; i++) {
-      final offset = pinOffsets[i];
-      final point = Offset(
-          center.dx + offset.dx * radius, center.dy + offset.dy * radius);
-      canvas.drawCircle(point, 4, Paint()..color = pinColors[i]);
-      canvas.drawCircle(
-          point, 7, Paint()..color = pinColors[i].withValues(alpha: 0.25));
-    }
-    final axisPaint = Paint()
-      ..color = const Color(0xFF0E7490).withValues(alpha: 0.38)
-      ..strokeWidth = 1;
-    canvas.drawLine(Offset(center.dx - radius, center.dy),
-        Offset(center.dx + radius, center.dy), axisPaint);
-    canvas.drawLine(Offset(center.dx, center.dy - radius),
-        Offset(center.dx, center.dy + radius), axisPaint);
-    final sweepPaint = Paint()
-      ..shader = SweepGradient(
-        startAngle: progress * math.pi * 2,
-        endAngle: progress * math.pi * 2 + 0.7,
-        colors: const [Color(0x0006B6D4), Color(0x6606B6D4)],
-      ).createShader(Rect.fromCircle(center: center, radius: radius));
-    canvas.drawArc(Rect.fromCircle(center: center, radius: radius),
-        progress * math.pi * 2, 0.7, true, sweepPaint);
-    canvas.drawCircle(center, 6, Paint()..color = const Color(0xFFE11D48));
-    canvas.drawCircle(center, 10,
-        Paint()..color = const Color(0xFFE11D48).withValues(alpha: 0.22));
-  }
-
-  @override
-  bool shouldRepaint(covariant _RadarPainter oldDelegate) =>
-      oldDelegate.progress != progress;
 }
 
 class _CreateRequestSheet extends StatefulWidget {

@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: PyJWT
-Version: 2.15.0
+Version: 2.15.1
 Summary: JSON Web Token implementation in Python
 Author-email: Jose Padilla <hello@jpadilla.com>
 License-Expression: MIT

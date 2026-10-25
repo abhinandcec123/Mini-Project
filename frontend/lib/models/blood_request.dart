@@ -46,6 +46,7 @@ class RequestMatch {
   final int id;
   final BloodRequest? request;
   final int donorId;
+  final String? donorName;
   final double? matchScore;
   final double? distanceKm;
   final String status;
@@ -56,6 +57,7 @@ class RequestMatch {
     required this.id,
     this.request,
     required this.donorId,
+    this.donorName,
     this.matchScore,
     this.distanceKm,
     required this.status,
@@ -68,6 +70,7 @@ class RequestMatch {
       id: json['id'],
       request: json['request'] != null ? BloodRequest.fromJson(json['request']) : null,
       donorId: json['donor_id'],
+      donorName: json['donor_name'],
       matchScore: (json['match_score'] as num?)?.toDouble(),
       distanceKm: (json['distance_km'] as num?)?.toDouble(),
       status: json['status'] ?? 'pending',

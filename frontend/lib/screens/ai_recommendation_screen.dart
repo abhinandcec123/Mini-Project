@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -9,8 +10,7 @@ import '../models/blood_request.dart';
 import '../widgets/donor_card.dart';
 import '../utils/location_format.dart';
 
-/// AI donor ranking view (distance, reliability, eligibility, availability
-/// weights) with a "Send Request to Donor" action per candidate.
+/// AI donor ranking view with an automatically advancing ranked queue.
 class AiRecommendationScreen extends StatefulWidget {
   final BloodRequest request;
   const AiRecommendationScreen({super.key, required this.request});
@@ -44,6 +44,8 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
   }
 
   double _score(Map<String, dynamic> candidate) {
+    final rankedScore = (candidate['score'] as num?)?.toDouble();
+    if (rankedScore != null) return rankedScore;
     final donor = Donor.fromJson(candidate['donor']);
     final distance = (candidate['distance_km'] as num?)?.toDouble();
     final components = [
@@ -57,23 +59,30 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
   }
 
   List<Map<String, dynamic>> get _rankedCandidates {
-    return _candidates.cast<Map<String, dynamic>>().toList()
-      ..sort((a, b) => _score(b).compareTo(_score(a)));
-  }
-
-  void _runIntakeDrill() {
-    var handoffs = 0;
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          return _IntakeDrillDialog(
-            onAdvance: () => setDialogState(() => handoffs++),
-            handoffs: handoffs,
-          );
-        },
-      ),
-    );
+    final candidates = _candidates.cast<Map<String, dynamic>>().toList();
+    int pendingFirst(Map<String, dynamic> a, Map<String, dynamic> b) {
+      final aPending = a['match_status'] == 'pending';
+      final bPending = b['match_status'] == 'pending';
+      if (aPending != bPending) return aPending ? -1 : 1;
+      return 0;
+    }
+    candidates.sort((a, b) {
+      final byQueue = pendingFirst(a, b);
+      if (byQueue != 0) return byQueue;
+      if (widget.request.priority == 'critical') {
+        final aDistance = (a['distance_km'] as num?)?.toDouble();
+        final bDistance = (b['distance_km'] as num?)?.toDouble();
+        if (aDistance == null && bDistance == null) {
+          return _score(b).compareTo(_score(a));
+        }
+        if (aDistance == null) return 1;
+        if (bDistance == null) return -1;
+        final byDistance = aDistance.compareTo(bDistance);
+        return byDistance != 0 ? byDistance : _score(b).compareTo(_score(a));
+      }
+      return _score(b).compareTo(_score(a));
+    });
+    return candidates;
   }
 
   @override
@@ -107,23 +116,6 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
     }
   }
 
-  Future<void> _dispatch(int donorId) async {
-    try {
-      final api = context.read<AuthProvider>().api;
-      await api
-          .post('/hospital/requests/${widget.request.id}/dispatch/$donorId');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request sent to donor.')),
-      );
-      _load();
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -137,14 +129,9 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
                   child: ListView(
                     padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
                     children: [
-                      _AlgorithmControls(
-                        weights: _weights,
+                      _AlgorithmSummary(
+                        priority: widget.request.priority,
                         radiusKm: _maxDistance,
-                        onWeightChanged: _setWeight,
-                        onRadiusChanged: (value) =>
-                            setState(() => _maxDistance = value),
-                        onRadiusCommitted: (_) => _load(),
-                        onRunDrill: _runIntakeDrill,
                       ),
                       const SizedBox(height: 16),
                       if (_rankedCandidates.isEmpty)
@@ -154,17 +141,20 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
                           candidates: _rankedCandidates.take(6).toList(),
                           hospitalProfile: _hospitalProfile,
                         ),
+                        const SizedBox(height: 10),
+                        const Text(
+                          'Ranked dispatch contacts one donor at a time. If they decline or do not respond, the next donor is contacted automatically.',
+                          style: TextStyle(fontSize: 12, color: Color(0xFF475569)),
+                        ),
                         const SizedBox(height: 18),
                         _CandidateSpotlight(
                           candidate: _rankedCandidates.first,
                           score: _score(_rankedCandidates.first),
                           weights: _weights,
-                          onDispatch: () => _dispatch(
-                              Donor.fromJson(_rankedCandidates.first['donor'])
-                                  .id),
+                          priority: widget.request.priority,
                         ),
                         const SizedBox(height: 20),
-                        const Text('FALLBACK QUEUE',
+                        const Text('RANKED QUEUE',
                             style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w800,
@@ -178,12 +168,7 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
                             distanceKm:
                                 (_rankedCandidates[i]['distance_km'] as num?)
                                     ?.toDouble(),
-                            alreadyDispatched: _rankedCandidates[i]
-                                    ['already_dispatched'] ==
-                                true,
-                            onDispatch: () => _dispatch(
-                                Donor.fromJson(_rankedCandidates[i]['donor'])
-                                    .id),
+                            matchStatus: _rankedCandidates[i]['match_status']?.toString(),
                           ),
                       ],
                     ],
@@ -193,21 +178,46 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
   }
 }
 
+class _AlgorithmSummary extends StatelessWidget {
+  final String priority;
+  final double radiusKm;
+
+  const _AlgorithmSummary({required this.priority, required this.radiusKm});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F172A),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text(
+          priority == 'critical'
+              ? 'CRITICAL TRIAGE · Nearest eligible donors are contacted first; distance takes priority.'
+              : 'RANKED MATCHING · Availability 35% · Distance 30% · Eligibility 20% · Reliability 15% · ${radiusKm.round()} km radius',
+          style: const TextStyle(
+            color: Color(0xFFBAF6FF),
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+}
+
 class _AlgorithmControls extends StatelessWidget {
   final List<double> weights;
   final double radiusKm;
   final void Function(int index, double value) onWeightChanged;
   final ValueChanged<double> onRadiusChanged;
   final ValueChanged<double> onRadiusCommitted;
-  final VoidCallback onRunDrill;
 
   const _AlgorithmControls(
       {required this.weights,
       required this.radiusKm,
       required this.onWeightChanged,
       required this.onRadiusChanged,
-      required this.onRadiusCommitted,
-      required this.onRunDrill});
+      required this.onRadiusCommitted});
 
   static const labels = [
     'Availability',
@@ -278,18 +288,6 @@ class _AlgorithmControls extends StatelessWidget {
               const Icon(Icons.radar, color: Color(0xFF06B6D4), size: 18),
             ],
           ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerRight,
-            child: OutlinedButton.icon(
-              onPressed: onRunDrill,
-              icon: const Icon(Icons.bolt, size: 16),
-              label: const Text('Run Emergency Intake Drill'),
-              style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF67E8F9),
-                  side: const BorderSide(color: Color(0xFF155E75))),
-            ),
-          ),
         ],
       ),
     );
@@ -311,20 +309,21 @@ class _CandidateGeoMap extends StatelessWidget {
     for (var i = 0; i < candidates.length; i++) {
       final candidate = candidates[i];
       final donor = Donor.fromJson(candidate['donor']);
-      final latitude = donor.effectiveLatitude;
-      final longitude = donor.effectiveLongitude;
+      var latitude = donor.latitude;
+      var longitude = donor.longitude;
+      if (latitude == null || longitude == null) {
+        latitude = donor.effectiveLatitude;
+        longitude = donor.effectiveLongitude;
+      }
       if (latitude != null && longitude != null) {
         donorPoints.add((i, LatLng(latitude, longitude)));
       }
     }
 
-    final hospitalHasGpsPin =
-        hospitalProfile?['location_source'] == 'device_gps';
     final hospitalLatitude = (hospitalProfile?['latitude'] as num?)?.toDouble();
     final hospitalLongitude =
         (hospitalProfile?['longitude'] as num?)?.toDouble();
-    final hospitalPoint = hospitalHasGpsPin &&
-            hospitalLatitude != null &&
+    final hospitalPoint = hospitalLatitude != null &&
             hospitalLongitude != null
         ? LatLng(hospitalLatitude, hospitalLongitude)
         : null;
@@ -339,8 +338,8 @@ class _CandidateGeoMap extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           child: Text(
             hospitalPoint == null
-                ? 'Set the hospital GPS pin from the dashboard. Donors appear on this map only while available and after they opt in to location sharing.'
-                : 'No available candidates have shared a current GPS location yet.',
+                ? 'Add a hospital location and donor registered-area coordinates to show them on the map.'
+                : 'No matched donors have registered-area coordinates yet.',
             style: const TextStyle(color: Color(0xFF475569)),
           ),
         ),
@@ -358,7 +357,7 @@ class _CandidateGeoMap extends StatelessWidget {
         const Padding(
           padding: EdgeInsets.only(bottom: 8),
           child: Text(
-            'GPS pins · Red: hospital · Teal: top candidate · Amber: other candidates',
+            'Registered-area pins · Red: hospital · Teal: top candidate · Amber: other candidates',
             style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
           ),
         ),
@@ -395,7 +394,14 @@ class _CandidateGeoMap extends StatelessWidget {
                       width: 28,
                       height: 28,
                       child: Tooltip(
-                        message: 'Candidate ${donorPoints[i].$1 + 1}',
+                        message: () {
+                          final donor = Donor.fromJson(
+                            candidates[donorPoints[i].$1]['donor'],
+                          );
+                          return donor.city == null || donor.city!.isEmpty
+                              ? donor.fullName
+                              : '${donor.fullName} · ${donor.city}';
+                        }(),
                         child: Container(
                           decoration: BoxDecoration(
                             color: donorPoints[i].$1 == 0
@@ -437,116 +443,29 @@ class _CandidateGeoMap extends StatelessWidget {
   }
 }
 
-class _IntakeDrillDialog extends StatelessWidget {
-  final int handoffs;
-  final VoidCallback onAdvance;
-
-  const _IntakeDrillDialog({required this.handoffs, required this.onAdvance});
-
-  static const donors = [
-    'Candidate #1 · Maya Chen',
-    'Candidate #2 · Daniel Ortiz',
-    'Candidate #3 · Amira Khan',
-    'Candidate #4 · Luca Martin'
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final activeIndex = handoffs.clamp(0, donors.length - 1);
-    return AlertDialog(
-      title: const Row(children: [
-        Icon(Icons.emergency, color: Color(0xFFE11D48)),
-        SizedBox(width: 8),
-        Text('Emergency intake drill')
-      ]),
-      content: SizedBox(
-        width: 430,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('SIMULATION · no donor notifications will be sent',
-                style: TextStyle(
-                    color: Color(0xFFB45309),
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800)),
-            const SizedBox(height: 12),
-            for (var i = 0; i < donors.length; i++)
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: CircleAvatar(
-                    radius: 15,
-                    backgroundColor: i < handoffs
-                        ? const Color(0xFFDCFCE7)
-                        : i == activeIndex
-                            ? const Color(0xFFFFE4E8)
-                            : const Color(0xFFF1F5F9),
-                    child:
-                        Text('${i + 1}', style: const TextStyle(fontSize: 10))),
-                title: Text(donors[i], style: const TextStyle(fontSize: 12)),
-                trailing: Text(
-                    i < handoffs
-                        ? 'DECLINED'
-                        : i == activeIndex
-                            ? 'CONTACTING'
-                            : 'QUEUED',
-                    style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w800,
-                        color: i < handoffs
-                            ? const Color(0xFFD97706)
-                            : i == activeIndex
-                                ? const Color(0xFFE11D48)
-                                : const Color(0xFF64748B))),
-              ),
-            const SizedBox(height: 6),
-            ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: LinearProgressIndicator(
-                    value: handoffs / donors.length,
-                    minHeight: 7,
-                    color: const Color(0xFF06B6D4),
-                    backgroundColor: const Color(0xFFE2E8F0))),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close')),
-        FilledButton.icon(
-          onPressed: handoffs >= donors.length ? null : onAdvance,
-          icon: const Icon(Icons.skip_next, size: 17),
-          label: Text(handoffs >= donors.length
-              ? 'Drill complete'
-              : 'Simulate handoff'),
-        ),
-      ],
-    );
-  }
-}
-
 class _CandidateSpotlight extends StatelessWidget {
   final Map<String, dynamic> candidate;
   final double score;
   final List<double> weights;
-  final VoidCallback onDispatch;
+  final String priority;
 
   const _CandidateSpotlight(
       {required this.candidate,
       required this.score,
       required this.weights,
-      required this.onDispatch});
+      required this.priority});
 
   @override
   Widget build(BuildContext context) {
     final donor = Donor.fromJson(candidate['donor']);
     final distance = (candidate['distance_km'] as num?)?.toDouble();
-    final eta = distance == null ? null : (distance / 30 * 60 + 5).round();
     final values = [
       donor.isAvailable ? 1.0 : 0.0,
-      distance == null ? 0.5 : (1 - distance / 50).clamp(0.0, 1.0),
+      distance == null
+          ? 0.5
+          : priority == 'critical'
+              ? math.exp(-distance / 100)
+              : (1 - distance / 50).clamp(0.0, 1.0),
       donor.isEligibleNow ? 1.0 : 0.0,
       (donor.reliabilityScore / 100).clamp(0.0, 1.0),
     ];
@@ -600,14 +519,8 @@ class _CandidateSpotlight extends StatelessWidget {
                 Text(formatDistanceKm(distance),
                     style: const TextStyle(fontWeight: FontWeight.w700)),
             ]),
-            if (eta != null)
-              Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text('Approx. travel estimate: ~$eta min',
-                      style: const TextStyle(
-                          fontSize: 11, color: Color(0xFF64748B)))),
             const SizedBox(height: 14),
-            for (var i = 0; i < values.length; i++) ...[
+            for (var i = 0; i < 3; i++) ...[
               Row(children: [
                 Expanded(
                     child: Text(
@@ -630,19 +543,32 @@ class _CandidateSpotlight extends StatelessWidget {
             ],
             const SizedBox(height: 5),
             SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                    onPressed: candidate['already_dispatched'] == true
-                        ? null
-                        : onDispatch,
-                    icon: const Icon(Icons.send_outlined, size: 17),
-                    label: Text(candidate['already_dispatched'] == true
-                        ? 'Already dispatched'
-                        : 'Send Request'))),
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: null,
+                icon: const Icon(Icons.autorenew, size: 17),
+                label: Text(_queueStatus(candidate['match_status']?.toString())),
+              ),
+            ),
           ],
         ),
       ),
     );
+  }
+
+  String _queueStatus(String? status) {
+    switch (status) {
+      case 'pending':
+        return 'Request sent — waiting for response';
+      case 'accepted':
+        return 'Accepted — preparing next donor if needed';
+      case 'declined':
+        return 'Declined — next donor is being contacted';
+      case 'completed':
+        return 'Donation completed';
+      default:
+        return 'First donor in the ranked dispatch queue';
+    }
   }
 }
 

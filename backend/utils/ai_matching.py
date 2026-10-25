@@ -28,28 +28,28 @@ def score_donor(donor, request_lat, request_lng, max_distance_km=50, include_una
     if not donor.is_eligible_now():
         return None, None
 
-    donor_lat = donor.effective_latitude if hasattr(donor, "effective_latitude") else donor.latitude
-    donor_lng = donor.effective_longitude if hasattr(donor, "effective_longitude") else donor.longitude
+    # Use registered area coordinates for distance; precise GPS is optional.
+    donor_lat = getattr(donor, "registered_latitude", None)
+    donor_lng = getattr(donor, "registered_longitude", None)
+    if donor_lat is None:
+        donor_lat = donor.latitude
+    if donor_lng is None:
+        donor_lng = donor.longitude
     distance = haversine_km(donor_lat, donor_lng, request_lat, request_lng)
 
-    # Distance sub-score (40 pts): closer is better, capped at max_distance_km
     if distance is None:
-        distance_score = 20  # unknown location: neutral-low score
+        distance_factor = 0.5
     elif distance > max_distance_km:
         return None, distance
     else:
-        distance_score = 40 * (1 - (distance / max_distance_km))
+        distance_factor = 1 - (distance / max_distance_km)
 
-    # Reliability sub-score (30 pts): donor's historical reliability_score is 0-100
-    reliability_score = 30 * (donor.reliability_score / 100)
-
-    # Eligibility sub-score (20 pts): full points since is_eligible_now already filtered
+    # Keep this score aligned with the hospital recommendation card.
+    availability_score = 35 if donor.is_available else 0
+    distance_score = 30 * distance_factor
     eligibility_score = 20
-
-    # Availability / experience sub-score (10 pts): rewards donors with a donation history
-    experience_score = min(10, donor.total_donations * 2)
-
-    total = distance_score + reliability_score + eligibility_score + experience_score
+    reliability_score = 15 * (donor.reliability_score / 100)
+    total = availability_score + distance_score + eligibility_score + reliability_score
     return round(total, 2), (round(distance, 4) if distance is not None else None)
 
 

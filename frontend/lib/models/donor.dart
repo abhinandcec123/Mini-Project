@@ -52,8 +52,10 @@ class Donor {
     final longitude = (json['longitude'] as num?)?.toDouble();
     final fallbackLat = (json['fallback_latitude'] as num?)?.toDouble();
     final fallbackLng = (json['fallback_longitude'] as num?)?.toDouble();
-    final effectiveLat = (json['current_latitude'] as num?)?.toDouble();
-    final effectiveLng = (json['current_longitude'] as num?)?.toDouble();
+    final effectiveLat = (json['current_latitude'] as num?)?.toDouble() ??
+        (json['registered_latitude'] as num?)?.toDouble() ?? latitude;
+    final effectiveLng = (json['current_longitude'] as num?)?.toDouble() ??
+        (json['registered_longitude'] as num?)?.toDouble() ?? longitude;
 
     return Donor(
       id: json['id'],

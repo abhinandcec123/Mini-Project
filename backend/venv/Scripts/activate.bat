@@ -8,7 +8,7 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
-set VIRTUAL_ENV=C:\Users\abhin\Downloads\lifepulse-ai-flutter-flask-mysql\backend\venv
+set VIRTUAL_ENV=C:\Users\abhin\Downloads\mini lifepulse-ai-flutter-flask-mysql\backend\venv
 
 if not defined PROMPT set PROMPT=$P$G
 

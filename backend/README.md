@@ -52,7 +52,28 @@ requiring multiple units, approve a different eligible donor for each unit;
 the request remains open until the approved donor count reaches the requested
 units. Approval updates the donor's donation history and issues a certificate.
 
-## 6. API summary
+## 6. Run backend tests
+
+By default, the backend tests use an in-memory SQLite database. To run them
+against MySQL/MariaDB, first create a dedicated, empty test database:
+
+```sql
+CREATE DATABASE lifepulse_test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+From the `backend` directory, set the test database URI and run the suite:
+
+```powershell
+$env:LIFEPULSE_TEST_DATABASE_URI = "mysql+pymysql://root@127.0.0.1:3306/lifepulse_test"
+.\venv\Scripts\python.exe -m unittest discover -s tests -p "test*.py" -v
+```
+
+Adjust the local MySQL username, password, and port as needed. The test suite
+creates and drops tables in `lifepulse_test`; its test configuration refuses
+to use another MySQL database name. Never point this variable at a development
+or production database.
+
+## 7. API summary
 
 | Area | Endpoint |
 |---|---|

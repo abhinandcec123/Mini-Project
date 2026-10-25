@@ -14,7 +14,7 @@ from models import (
     log_action,
 )
 from utils.security import role_required, current_user_id
-from utils.ai_matching import rank_donors_for_request
+from utils.dispatch_queue import dispatch_next_candidate, ranked_request_candidates
 
 hospital_bp = Blueprint("hospital", __name__, url_prefix="/api/hospital")
 
@@ -109,8 +109,11 @@ def create_request():
     )
     db.session.add(req)
     db.session.commit()
+    first_dispatch = dispatch_next_candidate(req, _get_current_hospital())
     log_action("hospital", hospital_id, "created_request", f"request_id={req.id}")
-    return jsonify(req.to_dict()), 201
+    response = req.to_dict()
+    response["first_dispatch"] = first_dispatch.to_dict() if first_dispatch else None
+    return jsonify(response), 201
 
 
 @hospital_bp.get("/requests")
@@ -141,35 +144,23 @@ def ai_candidates(request_id):
 
     hospital = _get_current_hospital()
     max_distance = float(request.args.get("max_distance_km", 50))
+    from utils.dispatch_queue import expire_stale_dispatches
+    expire_stale_dispatches(request_id=req.id)
 
-    available_donors = Donor.query.filter_by(is_active=True, is_available=True).all()
-    unavailable_donors = Donor.query.filter_by(is_active=True, is_available=False).all()
-
-    ranked = rank_donors_for_request(
-        available_donors,
-        req.blood_group,
-        hospital.effective_latitude,
-        hospital.effective_longitude,
-        max_distance,
-    )
-    fallback_ranked = rank_donors_for_request(
-        unavailable_donors,
-        req.blood_group,
-        hospital.effective_latitude,
-        hospital.effective_longitude,
-        max_distance,
-        include_unavailable=True,
-    )
-
-    already_matched_ids = {m.donor_id for m in req.matches}
+    ranked = ranked_request_candidates(req, hospital, max_distance)
+    matches_by_donor = {m.donor_id: m for m in req.matches}
     results = [
         {
             "donor": item["donor"].to_dict(include_contact=False),
             "score": item["score"],
             "distance_km": item["distance_km"],
-            "already_dispatched": item["donor"].id in already_matched_ids,
+            "already_dispatched": item["donor"].id in matches_by_donor,
+            "match_status": (
+                matches_by_donor[item["donor"].id].status
+                if item["donor"].id in matches_by_donor else None
+            ),
         }
-        for item in ranked + fallback_ranked
+        for item in ranked
     ]
     return jsonify(results), 200
 
@@ -193,14 +184,24 @@ def dispatch_to_donor(request_id, donor_id):
     if existing:
         return jsonify({"error": "Already dispatched to this donor", "match": existing.to_dict()}), 409
 
+    if RequestMatch.query.filter_by(request_id=request_id, status="pending").first():
+        return jsonify({"error": "The ranked dispatch queue is already waiting for a donor response"}), 409
+
+    if RequestMatch.query.filter(
+        RequestMatch.donor_id == donor_id,
+        RequestMatch.status.in_(("accepted", "completed")),
+    ).first():
+        return jsonify({"error": "This donor has already accepted another donation"}), 409
+
     hospital = _get_current_hospital()
     from utils.ai_matching import score_donor
 
     score, distance = score_donor(
         donor,
-        hospital.effective_latitude,
-        hospital.effective_longitude,
+        hospital.latitude if hospital.latitude is not None else hospital.fallback_latitude,
+        hospital.longitude if hospital.longitude is not None else hospital.fallback_longitude,
         max_distance_km=10_000,
+        include_unavailable=True,
     )
 
     match = RequestMatch(request_id=request_id, donor_id=donor_id, match_score=score, distance_km=distance)
@@ -217,6 +218,8 @@ def request_matches(request_id):
     req = BloodRequest.query.filter_by(id=request_id, hospital_id=hospital_id).first()
     if not req:
         return jsonify({"error": "Request not found"}), 404
+    from utils.dispatch_queue import expire_stale_dispatches
+    expire_stale_dispatches(request_id=req.id)
     return jsonify([m.to_dict() for m in req.matches]), 200
 
 
@@ -292,6 +295,9 @@ def cancel_request(request_id):
     if not req:
         return jsonify({"error": "Request not found"}), 404
     req.status = "cancelled"
+    for match in RequestMatch.query.filter_by(request_id=req.id, status="pending").all():
+        match.status = "declined"
+        match.responded_at = datetime.utcnow()
     db.session.commit()
     log_action("hospital", hospital_id, "cancelled_request", f"request_id={request_id}")
     return jsonify(req.to_dict()), 200
