@@ -1,6 +1,13 @@
 from flask import Blueprint, request, jsonify
 from extensions import db
-from models import Donor, Hospital, BloodRequest, AuditLog, log_action
+from models import (
+    Donor,
+    Hospital,
+    BloodRequest,
+    DonationCertificate,
+    AuditLog,
+    log_action,
+)
 from utils.security import role_required, current_user_id
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
@@ -61,6 +68,64 @@ def remove_hospital(hospital_id):
 def audit_logs():
     logs = AuditLog.query.order_by(AuditLog.created_at.desc()).limit(200).all()
     return jsonify([l.to_dict() for l in logs]), 200
+
+
+@admin_bp.get("/donor-locations")
+@role_required("admin")
+def donor_locations():
+    """Return registered coordinates for active donors, without contact data."""
+    donors = (
+        Donor.query.filter(
+            Donor.is_active.is_(True),
+            Donor.latitude.isnot(None),
+            Donor.longitude.isnot(None),
+        )
+        .order_by(Donor.full_name.asc())
+        .all()
+    )
+    locations = []
+    for donor in donors:
+        location = donor.to_dict(include_contact=False)
+        location["location_source"] = "registered"
+        locations.append(location)
+    return jsonify(locations), 200
+
+
+@admin_bp.get("/fulfilled-donations")
+@role_required("admin")
+def fulfilled_donations():
+    """Return donation certificates and coordinates of donors who completed."""
+    certificates = (
+        DonationCertificate.query.order_by(
+            DonationCertificate.donation_date.desc()
+        ).all()
+    )
+    donations = []
+    donors_by_id = {}
+    for certificate in certificates:
+        donation = certificate.to_dict()
+        donor = certificate.donor
+        if donor:
+            donation["blood_group"] = donor.blood_group
+            if donor.is_active:
+                donors_by_id[donor.id] = donor
+        else:
+            donation["blood_group"] = None
+        donations.append(donation)
+
+    completed_donor_locations = []
+    for donor in donors_by_id.values():
+        if donor.latitude is None or donor.longitude is None:
+            continue
+        location = donor.to_dict(include_contact=False)
+        location["location_source"] = "registered"
+        completed_donor_locations.append(location)
+
+    return jsonify({
+        "total_completed_donations": len(donations),
+        "completed_donations": donations,
+        "completed_donor_locations": completed_donor_locations,
+    }), 200
 
 
 @admin_bp.get("/inventory")
