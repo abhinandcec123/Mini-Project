@@ -113,27 +113,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     }
   }
 
-  Future<void> _openAddHospitalDialog() async {
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => _AddHospitalDialog(
-        onSubmit: (payload) async {
-          try {
-            final api = context.read<AuthProvider>().api;
-            await api.post('/admin/hospitals', body: payload);
-            if (!dialogContext.mounted) return;
-            Navigator.of(dialogContext).pop();
-            if (!mounted) return;
-            _loadAll();
-            _showSnack('Hospital added by admin');
-          } on ApiException catch (e) {
-            _showSnack(e.message);
-          }
-        },
-      ),
-    );
-  }
-
   Future<void> _openBulkAddDialog() async {
     await showDialog<void>(
       context: context,
@@ -506,56 +485,37 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         (_fulfilledData['certificates'] as List<dynamic>?) ??
         (_fulfilledData['completed_matches'] as List<dynamic>?) ??
         [];
-    final requests =
-        (_fulfilledData['fulfilled_requests'] as List<dynamic>?) ?? [];
     return RefreshIndicator(
       onRefresh: _loadAll,
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           Text(
-              'Fulfilled requests (${_fulfilledData['total_fulfilled_requests'] ?? requests.length})',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            'Completed donations (${donations.length})',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 10),
-          const Text('A fulfilled request may require multiple donor donations to cover every requested unit.',
-              style: TextStyle(color: Color(0xFF64748B), fontSize: 12)),
-          const SizedBox(height: 8),
-          if (requests.isEmpty)
-            const Center(child: Text('No fulfilled requests yet.')),
-          ...requests.map((item) {
-            final request = item as Map<String, dynamic>;
-            return Card(
-              child: ListTile(
-                leading: const CircleAvatar(child: Icon(Icons.check_circle)),
-                title: Text(request['patient_name']?.toString() ?? 'Request'),
-                subtitle: Text(
-                  '${request['hospital_name'] ?? 'Hospital'} · ${request['blood_group'] ?? 'Unknown'}\n'
-                  'Approved ${request['approved_units'] ?? 0} of ${request['units_needed'] ?? 1} unit(s)',
-                ),
-                isThreeLine: true,
-              ),
-            );
-          }),
-          const SizedBox(height: 16),
-          Text('Completed donations (${donations.length})',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const Text(
+            'Donation records confirmed by hospitals.',
+            style: TextStyle(color: Color(0xFF64748B), fontSize: 12),
+          ),
           const SizedBox(height: 8),
           if (donations.isEmpty)
             const Center(child: Text('No completed donations yet.')),
           ...donations.map((item) {
             final donation = item as Map<String, dynamic>;
             return Card(
-            child: ListTile(
-              leading: const CircleAvatar(child: Icon(Icons.check)),
-              title: Text(donation['donor_name']?.toString() ?? 'Donor'),
-              subtitle: Text(
-                '${donation['hospital_name'] ?? 'Hospital'}\n'
-                'Blood group: ${donation['blood_group'] ?? 'Unknown'}',
+              child: ListTile(
+                leading: const CircleAvatar(child: Icon(Icons.check)),
+                title: Text(donation['donor_name']?.toString() ?? 'Donor'),
+                subtitle: Text(
+                  '${donation['hospital_name'] ?? 'Hospital'}\n'
+                  'Blood group: ${donation['blood_group'] ?? 'Unknown'}',
+                ),
+                isThreeLine: true,
+                trailing: Text(donation['donation_date']?.toString() ?? ''),
               ),
-              isThreeLine: true,
-              trailing: Text(donation['donation_date']?.toString() ?? ''),
-            ),
-          );
+            );
           }),
         ],
       ),
@@ -739,12 +699,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   onChanged: (value) => setState(() => _hospitalQuery = value),
                 ),
               ),
-              const SizedBox(width: 8),
-              FilledButton.icon(
-                onPressed: _openAddHospitalDialog,
-                icon: const Icon(Icons.add),
-                label: const Text('Add hospital'),
-              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -826,194 +780,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 }
-
-class _AddHospitalDialog extends StatefulWidget {
-  final Future<void> Function(Map<String, dynamic>) onSubmit;
-
-  const _AddHospitalDialog({required this.onSubmit});
-
-  @override
-  State<_AddHospitalDialog> createState() => _AddHospitalDialogState();
-}
-
-class _AddHospitalDialogState extends State<_AddHospitalDialog> {
-  final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _regController = TextEditingController();
-  final _phoneController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _addressController = TextEditingController();
-  final _cityController = TextEditingController();
-  final _latController = TextEditingController();
-  final _lngController = TextEditingController();
-  bool _skipGeocoding = true;
-  bool _obscurePassword = true;
-  bool _submitting = false;
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _regController.dispose();
-    _phoneController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
-    _addressController.dispose();
-    _cityController.dispose();
-    _latController.dispose();
-    _lngController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Add hospital manually'),
-      content: SingleChildScrollView(
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: _nameController,
-                decoration: const InputDecoration(labelText: 'Hospital name'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Required' : null,
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _regController,
-                decoration:
-                    const InputDecoration(labelText: 'Registration number'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Required' : null,
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _phoneController,
-                keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(labelText: 'Phone'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Required' : null,
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _emailController,
-                decoration:
-                    const InputDecoration(labelText: 'Email (optional)'),
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _passwordController,
-                obscureText: _obscurePassword,
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  suffixIcon: IconButton(
-                    tooltip:
-                        _obscurePassword ? 'Show password' : 'Hide password',
-                    icon: Icon(
-                      _obscurePassword
-                          ? Icons.visibility_outlined
-                          : Icons.visibility_off_outlined,
-                    ),
-                    onPressed: () => setState(
-                      () => _obscurePassword = !_obscurePassword,
-                    ),
-                  ),
-                ),
-                validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _addressController,
-                decoration: const InputDecoration(labelText: 'Address'),
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _cityController,
-                decoration: const InputDecoration(labelText: 'City (optional)'),
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _latController,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(
-                          labelText: 'Latitude (optional)'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _lngController,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration: const InputDecoration(
-                          labelText: 'Longitude (optional)'),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _skipGeocoding,
-                title: const Text('Admin override: skip geocoding'),
-                onChanged: (value) =>
-                    setState(() => _skipGeocoding = value ?? true),
-                controlAffinity: ListTileControlAffinity.leading,
-              ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel')),
-        FilledButton(
-          onPressed: _submitting
-              ? null
-              : () async {
-                  if (!_formKey.currentState!.validate()) return;
-                  setState(() => _submitting = true);
-                  final payload = {
-                    'name': _nameController.text.trim(),
-                    'registration_number': _regController.text.trim(),
-                    'phone': _phoneController.text.trim(),
-                    'email': _emailController.text.trim().isEmpty
-                        ? null
-                        : _emailController.text.trim(),
-                    'password': _passwordController.text,
-                    'address': _addressController.text.trim(),
-                    'city': _cityController.text.trim(),
-                    'latitude': _latController.text.trim().isEmpty
-                        ? null
-                        : double.tryParse(_latController.text.trim()),
-                    'longitude': _lngController.text.trim().isEmpty
-                        ? null
-                        : double.tryParse(_lngController.text.trim()),
-                    'skip_geocoding': _skipGeocoding,
-                  };
-                  await widget.onSubmit(payload);
-                  if (mounted) setState(() => _submitting = false);
-                },
-          child: _submitting
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : const Text('Save hospital'),
-        ),
-      ],
-    );
-  }
-}
-
 
 class _BulkAddUsersDialog extends StatefulWidget {
   final Future<void> Function(Map<String, dynamic> payload) onSubmit;
