@@ -77,9 +77,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         _hospitals = results[3];
         _logs = results[4];
         _donorLocations = results[5];
-        _fulfilledData = results[6] is Map<String, dynamic>
-            ? results[6] as Map<String, dynamic>
-            : {};
+        _fulfilledData = results[6] is Map<String, dynamic> ? results[6] as Map<String, dynamic> : {};
         _donorLocationError = null;
       });
     } on ApiException catch (e) {
@@ -115,21 +113,68 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     }
   }
 
+  Future<void> _openAddHospitalDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _AddHospitalDialog(
+        onSubmit: (payload) async {
+          try {
+            final api = context.read<AuthProvider>().api;
+            await api.post('/admin/hospitals', body: payload);
+            if (!dialogContext.mounted) return;
+            Navigator.of(dialogContext).pop();
+            if (!mounted) return;
+            _loadAll();
+            _showSnack('Hospital added by admin');
+          } on ApiException catch (e) {
+            _showSnack(e.message);
+          }
+        },
+      ),
+    );
+  }
+
   Future<void> _openBulkAddDialog() async {
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => _BulkAddUsersDialog(
         onSubmit: (payload) async {
           try {
-            await context.read<AuthProvider>().api.post(
+            final result = await context.read<AuthProvider>().api.post(
                   '/admin/bulk-users',
                   body: payload,
-                );
+                ) as Map<String, dynamic>;
             if (!dialogContext.mounted) return;
             Navigator.of(dialogContext).pop();
             if (!mounted) return;
             await _loadAll();
-            _showSnack('Users imported successfully');
+            final donorCount = result['created_donors_count'] ?? 0;
+            final hospitalCount = result['created_hospitals_count'] ?? 0;
+            final errors = (result['errors'] as List<dynamic>?) ?? [];
+            _showSnack(
+              'Imported $donorCount donor(s) and $hospitalCount hospital(s). '
+              '${errors.length} row(s) skipped.',
+            );
+            if (errors.isNotEmpty && mounted) {
+              await showDialog<void>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('CSV import results'),
+                  content: SizedBox(
+                    width: 520,
+                    child: SingleChildScrollView(
+                      child: SelectableText(errors.join('\n')),
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Close'),
+                    ),
+                  ],
+                ),
+              );
+            }
           } on ApiException catch (e) {
             _showSnack(e.message);
           }
@@ -376,7 +421,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             children: [
               const Expanded(
                 child: Text(
-                  'Registered donor locations',
+                  'Live donor locations',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                 ),
               ),
@@ -394,7 +439,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             ],
           ),
           Text(
-            '${pins.length} registered donor location(s) · refreshes every 15 seconds while this tab is open.',
+            '${pins.length} available donor location(s) · refreshes every 15 seconds while this tab is open.',
             style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
           ),
           if (_donorLocationError != null) ...[
@@ -408,11 +453,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           SharedLocationMap(
             pins: pins,
             height: 500,
-            emptyMessage: 'No active donors have registered coordinates.',
+            emptyMessage:
+                'No available donors are sharing a GPS or test pin. Donors must opt in and turn availability on.',
           ),
           const SizedBox(height: 8),
           const Text(
-            'Pins use the registered database location for each active donor.',
+            'Only available donors who opted in to location sharing appear here.',
             style: TextStyle(color: Color(0xFF64748B), fontSize: 12),
           ),
         ],
@@ -440,8 +486,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
                   Icons.local_hospital),
               _statCard('Open Requests', '${_stats['open_requests'] ?? 0}',
                   Icons.pending_actions),
-              _statCard('Fulfilled Requests',
-                  '${_stats['fulfilled_requests'] ?? 0}', Icons.check_circle),
+              _statCard('Fulfilled Requests', '${_stats['fulfilled_requests'] ?? 0}',
+                  Icons.check_circle),
               _statCard(
                 'Completed Donations',
                 '${_fulfilledData['total_completed_donations'] ?? 0}',
@@ -457,61 +503,59 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   Widget _buildFulfilledDonations() {
     final donations =
         (_fulfilledData['completed_donations'] as List<dynamic>?) ??
-            (_fulfilledData['certificates'] as List<dynamic>?) ??
-            (_fulfilledData['completed_matches'] as List<dynamic>?) ??
-            [];
-    final locations =
-        (_fulfilledData['completed_donor_locations'] as List<dynamic>?) ?? [];
-    final pins = locations
-        .whereType<Map<String, dynamic>>()
-        .map((donor) {
-          final latitude = (donor['latitude'] as num?)?.toDouble();
-          final longitude = (donor['longitude'] as num?)?.toDouble();
-          if (latitude == null || longitude == null) return null;
-          return SharedLocationPin(
-            point: LatLng(latitude, longitude),
-            label:
-                '${donor['full_name']} · ${donor['blood_group']} · Completed donor',
-            color: const Color(0xFF047857),
-            icon: Icons.verified,
-          );
-        })
-        .whereType<SharedLocationPin>()
-        .toList();
+        (_fulfilledData['certificates'] as List<dynamic>?) ??
+        (_fulfilledData['completed_matches'] as List<dynamic>?) ??
+        [];
+    final requests =
+        (_fulfilledData['fulfilled_requests'] as List<dynamic>?) ?? [];
     return RefreshIndicator(
       onRefresh: _loadAll,
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text('Completed donations (${donations.length})',
-              style:
-                  const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          Text(
+              'Fulfilled requests (${_fulfilledData['total_fulfilled_requests'] ?? requests.length})',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
           const SizedBox(height: 10),
-          const Text('Recorded locations of donors with a completed donation',
+          const Text('A fulfilled request may require multiple donor donations to cover every requested unit.',
               style: TextStyle(color: Color(0xFF64748B), fontSize: 12)),
           const SizedBox(height: 8),
-          SharedLocationMap(
-            pins: pins,
-            height: 300,
-            emptyMessage: 'Completed donors have no registered coordinates.',
-          ),
+          if (requests.isEmpty)
+            const Center(child: Text('No fulfilled requests yet.')),
+          ...requests.map((item) {
+            final request = item as Map<String, dynamic>;
+            return Card(
+              child: ListTile(
+                leading: const CircleAvatar(child: Icon(Icons.check_circle)),
+                title: Text(request['patient_name']?.toString() ?? 'Request'),
+                subtitle: Text(
+                  '${request['hospital_name'] ?? 'Hospital'} · ${request['blood_group'] ?? 'Unknown'}\n'
+                  'Approved ${request['approved_units'] ?? 0} of ${request['units_needed'] ?? 1} unit(s)',
+                ),
+                isThreeLine: true,
+              ),
+            );
+          }),
           const SizedBox(height: 16),
+          Text('Completed donations (${donations.length})',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
           if (donations.isEmpty)
             const Center(child: Text('No completed donations yet.')),
           ...donations.map((item) {
             final donation = item as Map<String, dynamic>;
             return Card(
-              child: ListTile(
-                leading: const CircleAvatar(child: Icon(Icons.check)),
-                title: Text(donation['donor_name']?.toString() ?? 'Donor'),
-                subtitle: Text(
-                  '${donation['hospital_name'] ?? 'Hospital'}\n'
-                  'Blood group: ${donation['blood_group'] ?? 'Unknown'}',
-                ),
-                isThreeLine: true,
-                trailing: Text(donation['donation_date']?.toString() ?? ''),
+            child: ListTile(
+              leading: const CircleAvatar(child: Icon(Icons.check)),
+              title: Text(donation['donor_name']?.toString() ?? 'Donor'),
+              subtitle: Text(
+                '${donation['hospital_name'] ?? 'Hospital'}\n'
+                'Blood group: ${donation['blood_group'] ?? 'Unknown'}',
               ),
-            );
+              isThreeLine: true,
+              trailing: Text(donation['donation_date']?.toString() ?? ''),
+            ),
+          );
           }),
         ],
       ),
@@ -520,9 +564,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   Widget _buildInventory() {
     if (_inventory.isEmpty) {
-      return const Center(child: Text('No donor inventory data yet.'));
+      return const Center(
+        child: Text('No eligible donors are currently available for matching.'),
+      );
     }
-    final entries = _inventory.entries.toList();
+    final cities = _inventory.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
     return RefreshIndicator(
       onRefresh: _loadAll,
       child: ListView(
@@ -531,72 +578,48 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           const Text('City blood inventory',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
           const SizedBox(height: 4),
-          const Text('Eligible and available donor reserve by blood group',
+          const Text(
+              'Available, eligible donors sharing their location, grouped by city and blood group.',
               style: TextStyle(color: Color(0xFF64748B), fontSize: 12)),
           const SizedBox(height: 4),
           const Text('Counts are eligible donors, not stored blood units.',
               style: TextStyle(color: Color(0xFFB45309), fontSize: 11)),
           const SizedBox(height: 14),
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: entries.length,
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 220,
-              mainAxisSpacing: 10,
-              crossAxisSpacing: 10,
-              childAspectRatio: 1.6,
-            ),
-            itemBuilder: (context, index) {
-              final entry = entries[index];
-              return Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(entry.key,
-                          style: const TextStyle(
-                              color: Color(0xFFBE123C),
-                              fontWeight: FontWeight.w800)),
-                      const SizedBox(height: 5),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text('${entry.value}',
-                              style: const TextStyle(
-                                  fontSize: 23, fontWeight: FontWeight.w700)),
-                          const SizedBox(width: 5),
-                          const Padding(
-                              padding: EdgeInsets.only(bottom: 3),
-                              child: Text('donors',
-                                  style: TextStyle(
-                                      color: Color(0xFF64748B), fontSize: 10))),
-                        ],
-                      ),
-                      const SizedBox(height: 7),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: ((entry.value as num).toDouble() / 10)
-                              .clamp(0.0, 1.0),
-                          minHeight: 6,
-                          color: (entry.value as num) <= 2
-                              ? const Color(0xFFE11D48)
-                              : const Color(0xFF059669),
-                          backgroundColor: const Color(0xFFE2E8F0),
-                        ),
-                      ),
-                      const Text('Planning threshold: 10 donors',
-                          style:
-                              TextStyle(color: Color(0xFF64748B), fontSize: 9)),
-                    ],
-                  ),
+          ...cities.map((cityEntry) {
+            final groups = cityEntry.value is Map
+                ? Map<String, dynamic>.from(cityEntry.value as Map)
+                : <String, dynamic>{};
+            final bloodGroups = groups.entries
+                .where((entry) => entry.key != 'total')
+                .toList()
+              ..sort((a, b) => a.key.compareTo(b.key));
+            return Card(
+              margin: const EdgeInsets.only(bottom: 12),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${cityEntry.key} · ${groups['total'] ?? 0} donor(s)',
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: bloodGroups
+                          .map((group) => Chip(
+                                label: Text('${group.key}: ${group.value}'),
+                              ))
+                          .toList(),
+                    ),
+                  ],
                 ),
-              );
-            },
-          ),
+              ),
+            );
+          }),
         ],
       ),
     );
@@ -631,11 +654,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       final query = _donorQuery.trim().toLowerCase();
       if (query.isEmpty) return true;
       return [
-        donor['full_name'],
-        donor['blood_group'],
-        donor['city'],
-        donor['phone'],
-        donor['email'],
+        donor['full_name'], donor['blood_group'], donor['city'],
+        donor['phone'], donor['email'],
       ].any((value) => (value ?? '').toString().toLowerCase().contains(query));
     }).toList();
     return RefreshIndicator(
@@ -695,18 +715,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   }
 
   Widget _buildHospitals() {
-    if (_hospitals.isEmpty) {
-      return const Center(child: Text('No hospitals registered yet.'));
-    }
     final hospitals = _hospitals.where((hospital) {
       final query = _hospitalQuery.trim().toLowerCase();
       if (query.isEmpty) return true;
       return [
-        hospital['name'],
-        hospital['city'],
-        hospital['registration_number'],
-        hospital['phone'],
-        hospital['email'],
+        hospital['name'], hospital['city'], hospital['registration_number'],
+        hospital['phone'], hospital['email'],
       ].any((value) => (value ?? '').toString().toLowerCase().contains(query));
     }).toList();
     return RefreshIndicator(
@@ -714,12 +728,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          TextField(
-            decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search), labelText: 'Search hospitals'),
-            onChanged: (value) => setState(() => _hospitalQuery = value),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search),
+                    labelText: 'Search hospitals',
+                  ),
+                  onChanged: (value) => setState(() => _hospitalQuery = value),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: _openAddHospitalDialog,
+                icon: const Icon(Icons.add),
+                label: const Text('Add hospital'),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
+          if (hospitals.isEmpty)
+            const Center(child: Text('No hospitals match this search.')),
           if (hospitals.isEmpty)
             const Center(child: Text('No hospitals match this search.')),
           ...hospitals.map((h) => Card(
@@ -796,6 +826,194 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
     );
   }
 }
+
+class _AddHospitalDialog extends StatefulWidget {
+  final Future<void> Function(Map<String, dynamic>) onSubmit;
+
+  const _AddHospitalDialog({required this.onSubmit});
+
+  @override
+  State<_AddHospitalDialog> createState() => _AddHospitalDialogState();
+}
+
+class _AddHospitalDialogState extends State<_AddHospitalDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _regController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _addressController = TextEditingController();
+  final _cityController = TextEditingController();
+  final _latController = TextEditingController();
+  final _lngController = TextEditingController();
+  bool _skipGeocoding = true;
+  bool _obscurePassword = true;
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _regController.dispose();
+    _phoneController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    _addressController.dispose();
+    _cityController.dispose();
+    _latController.dispose();
+    _lngController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add hospital manually'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'Hospital name'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Required' : null,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _regController,
+                decoration:
+                    const InputDecoration(labelText: 'Registration number'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Required' : null,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _phoneController,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(labelText: 'Phone'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Required' : null,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _emailController,
+                decoration:
+                    const InputDecoration(labelText: 'Email (optional)'),
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _passwordController,
+                obscureText: _obscurePassword,
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  suffixIcon: IconButton(
+                    tooltip:
+                        _obscurePassword ? 'Show password' : 'Hide password',
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                    onPressed: () => setState(
+                      () => _obscurePassword = !_obscurePassword,
+                    ),
+                  ),
+                ),
+                validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _addressController,
+                decoration: const InputDecoration(labelText: 'Address'),
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _cityController,
+                decoration: const InputDecoration(labelText: 'City (optional)'),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _latController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                          labelText: 'Latitude (optional)'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _lngController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                          labelText: 'Longitude (optional)'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _skipGeocoding,
+                title: const Text('Admin override: skip geocoding'),
+                onChanged: (value) =>
+                    setState(() => _skipGeocoding = value ?? true),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel')),
+        FilledButton(
+          onPressed: _submitting
+              ? null
+              : () async {
+                  if (!_formKey.currentState!.validate()) return;
+                  setState(() => _submitting = true);
+                  final payload = {
+                    'name': _nameController.text.trim(),
+                    'registration_number': _regController.text.trim(),
+                    'phone': _phoneController.text.trim(),
+                    'email': _emailController.text.trim().isEmpty
+                        ? null
+                        : _emailController.text.trim(),
+                    'password': _passwordController.text,
+                    'address': _addressController.text.trim(),
+                    'city': _cityController.text.trim(),
+                    'latitude': _latController.text.trim().isEmpty
+                        ? null
+                        : double.tryParse(_latController.text.trim()),
+                    'longitude': _lngController.text.trim().isEmpty
+                        ? null
+                        : double.tryParse(_lngController.text.trim()),
+                    'skip_geocoding': _skipGeocoding,
+                  };
+                  await widget.onSubmit(payload);
+                  if (mounted) setState(() => _submitting = false);
+                },
+          child: _submitting
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Save hospital'),
+        ),
+      ],
+    );
+  }
+}
+
 
 class _BulkAddUsersDialog extends StatefulWidget {
   final Future<void> Function(Map<String, dynamic> payload) onSubmit;
@@ -906,7 +1124,21 @@ class _BulkAddUsersDialogState extends State<_BulkAddUsersDialog> {
                   final hospitals = <Map<String, dynamic>>[];
 
                   for (final line in lines) {
-                    final parts = line.split(',').map((p) => p.trim()).toList();
+                    final parts = _parseCsvRow(line)
+                        .map((part) => part.trim())
+                        .toList();
+                    if (parts.isEmpty) continue;
+                    final firstColumn = parts.first
+                        .replaceFirst('\uFEFF', '')
+                        .toLowerCase()
+                        .replaceAll(' ', '_');
+                    if (firstColumn == 'name' ||
+                        firstColumn == 'full_name' ||
+                        firstColumn == 'hospitalname' ||
+                        firstColumn == 'hospital_name' ||
+                        firstColumn == 'donor_name') {
+                      continue;
+                    }
                     if (_targetType == 0) {
                       if (parts.length >= 3) {
                         donors.add({
@@ -914,9 +1146,7 @@ class _BulkAddUsersDialogState extends State<_BulkAddUsersDialog> {
                           'phone': parts[1],
                           'blood_group': parts[2],
                           'city': parts.length > 3 ? parts[3] : '',
-                          'age': parts.length > 4
-                              ? int.tryParse(parts[4]) ?? 25
-                              : 25,
+                          'age': parts.length > 4 ? int.tryParse(parts[4]) ?? 25 : 25,
                           if (parts.length > 5 && parts[5].isNotEmpty)
                             'latitude': double.tryParse(parts[5]),
                           if (parts.length > 6 && parts[6].isNotEmpty)
@@ -931,8 +1161,7 @@ class _BulkAddUsersDialogState extends State<_BulkAddUsersDialog> {
                           'phone': parts[1],
                           'city': parts.length > 2 ? parts[2] : '',
                           'address': parts.length > 3 ? parts[3] : '',
-                          'registration_number':
-                              parts.length > 4 ? parts[4] : '',
+                          'registration_number': parts.length > 4 ? parts[4] : '',
                           if (parts.length > 5 && parts[5].isNotEmpty)
                             'latitude': double.tryParse(parts[5]),
                           if (parts.length > 6 && parts[6].isNotEmpty)
@@ -955,8 +1184,7 @@ class _BulkAddUsersDialogState extends State<_BulkAddUsersDialog> {
               ? const SizedBox(
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Colors.white),
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                 )
               : const Icon(Icons.upload_file),
           label: const Text('Import CSV'),
@@ -964,4 +1192,32 @@ class _BulkAddUsersDialogState extends State<_BulkAddUsersDialog> {
       ],
     );
   }
+}
+
+List<String> _parseCsvRow(String row) {
+  final fields = <String>[];
+  final field = StringBuffer();
+  var insideQuotes = false;
+  var index = 0;
+
+  while (index < row.length) {
+    final character = row[index];
+    if (character == '"') {
+      if (insideQuotes && index + 1 < row.length && row[index + 1] == '"') {
+        field.write('"');
+        index++;
+      } else {
+        insideQuotes = !insideQuotes;
+      }
+    } else if (character == ',' && !insideQuotes) {
+      fields.add(field.toString());
+      field.clear();
+    } else {
+      field.write(character);
+    }
+    index++;
+  }
+
+  fields.add(field.toString());
+  return fields;
 }

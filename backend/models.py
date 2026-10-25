@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from extensions import db
 
 BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
+MAX_LOCATION_ACCURACY_METERS = 500
 
 COMPATIBLE_DONORS = {
     "A+": ["A+", "A-", "O+", "O-"],
@@ -29,6 +30,8 @@ class Donor(db.Model):
     phone = db.Column(db.String(15), unique=True, nullable=False, index=True)
     email = db.Column(db.String(120), unique=True, nullable=True)
     password_hash = db.Column(db.String(255), nullable=False)
+    must_change_password = db.Column(db.Boolean, default=False, nullable=False)
+    password_version = db.Column(db.Integer, default=0, nullable=False)
 
     blood_group = db.Column(db.String(3), nullable=False)
     age = db.Column(db.Integer, nullable=False)
@@ -37,9 +40,18 @@ class Donor(db.Model):
     address = db.Column(db.String(255), nullable=True)
     latitude = db.Column(db.Float, nullable=True)
     longitude = db.Column(db.Float, nullable=True)
+    fallback_latitude = db.Column(db.Float, nullable=True)
+    fallback_longitude = db.Column(db.Float, nullable=True)
+    location_source = db.Column(db.String(30), default="address")
+    location_accuracy_km = db.Column(db.Float, default=0.0)
+    gps_latitude = db.Column(db.Float, nullable=True)
+    gps_longitude = db.Column(db.Float, nullable=True)
+    gps_accuracy_m = db.Column(db.Float, nullable=True)
+    gps_location_source = db.Column(db.String(20), nullable=True)
+    location_sharing_enabled = db.Column(db.Boolean, default=False, nullable=False)
     city = db.Column(db.String(100), nullable=True)
 
-    is_available = db.Column(db.Boolean, default=True)
+    is_available = db.Column(db.Boolean, default=False)
     reliability_score = db.Column(db.Float, default=80.0)  # 0-100, adjusted by history
     total_donations = db.Column(db.Integer, default=0)
     last_donation_date = db.Column(db.DateTime, nullable=True)
@@ -47,20 +59,30 @@ class Donor(db.Model):
     is_active = db.Column(db.Boolean, default=True)  # soft-delete flag for admin removal
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    def is_eligible_now(self):
-        """Exclude recent donations and recent accepted donation commitments."""
-        cutoff = datetime.utcnow() - timedelta(days=90)
-        if self.last_donation_date and self.last_donation_date > cutoff:
-            return False
-        recent_commitment = RequestMatch.query.filter(
-            RequestMatch.donor_id == self.id,
-            RequestMatch.status.in_(["accepted", "completed"]),
-            RequestMatch.responded_at >= cutoff,
-        ).first()
-        return recent_commitment is None
+    @property
+    def effective_latitude(self):
+        return self.gps_latitude if self.location_sharing_enabled and self.is_available else None
 
-    def to_dict(self, include_contact=True):
-        eligible_now = self.is_eligible_now()
+    @property
+    def effective_longitude(self):
+        return self.gps_longitude if self.location_sharing_enabled and self.is_available else None
+
+    @property
+    def registered_latitude(self):
+        """Approximate registered location used for matching and map markers."""
+        return self.fallback_latitude if self.fallback_latitude is not None else self.latitude
+
+    @property
+    def registered_longitude(self):
+        return self.fallback_longitude if self.fallback_longitude is not None else self.longitude
+
+    def is_eligible_now(self):
+        """A donor must wait ~90 days between whole-blood donations."""
+        if not self.last_donation_date:
+            return True
+        return (datetime.utcnow() - self.last_donation_date).days >= 90
+
+    def to_dict(self, include_contact=True, include_saved_pin=False):
         data = {
             "id": self.id,
             "full_name": self.full_name,
@@ -68,17 +90,32 @@ class Donor(db.Model):
             "age": self.age,
             "gender": self.gender,
             "city": self.city,
-            "latitude": self.latitude,
-            "longitude": self.longitude,
-            "is_available": self.is_available and eligible_now,
+            "latitude": self.latitude if include_contact else self.registered_latitude,
+            "longitude": self.longitude if include_contact else self.registered_longitude,
+            "fallback_latitude": self.fallback_latitude if include_contact else None,
+            "fallback_longitude": self.fallback_longitude if include_contact else None,
+            "registered_latitude": self.registered_latitude,
+            "registered_longitude": self.registered_longitude,
+            "current_latitude": self.effective_latitude,
+            "current_longitude": self.effective_longitude,
+            "effective_latitude": self.effective_latitude,
+            "effective_longitude": self.effective_longitude,
+            "location_source": self.location_source,
+            "location_accuracy_m": self.gps_accuracy_m if self.effective_latitude is not None else None,
+            "location_sharing_enabled": self.location_sharing_enabled and self.is_available,
+            "is_available": self.is_available,
             "reliability_score": self.reliability_score,
             "total_donations": self.total_donations,
-            "is_eligible_now": eligible_now,
+            "is_eligible_now": self.is_eligible_now(),
             "last_donation_date": self.last_donation_date.isoformat() if self.last_donation_date else None,
         }
         if include_contact:
             data["phone"] = self.phone
             data["email"] = self.email
+        if include_saved_pin and self.gps_location_source == "test_pin":
+            data["saved_pin_latitude"] = self.gps_latitude
+            data["saved_pin_longitude"] = self.gps_longitude
+            data["gps_location_source"] = self.gps_location_source
         return data
 
 
@@ -91,15 +128,30 @@ class Hospital(db.Model):
     phone = db.Column(db.String(15), unique=True, nullable=False, index=True)
     email = db.Column(db.String(120), unique=True, nullable=True)
     password_hash = db.Column(db.String(255), nullable=False)
+    must_change_password = db.Column(db.Boolean, default=False, nullable=False)
+    password_version = db.Column(db.Integer, default=0, nullable=False)
 
     address = db.Column(db.String(255), nullable=True)
     city = db.Column(db.String(100), nullable=True)
     latitude = db.Column(db.Float, nullable=True)
     longitude = db.Column(db.Float, nullable=True)
+    fallback_latitude = db.Column(db.Float, nullable=True)
+    fallback_longitude = db.Column(db.Float, nullable=True)
+    location_source = db.Column(db.String(30), default="address")
+    location_accuracy_km = db.Column(db.Float, default=0.0)
+    gps_accuracy_m = db.Column(db.Float, nullable=True)
 
     is_verified = db.Column(db.Boolean, default=False)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    @property
+    def effective_latitude(self):
+        return self.latitude if self.location_source == "device_gps" else None
+
+    @property
+    def effective_longitude(self):
+        return self.longitude if self.location_source == "device_gps" else None
 
     def to_dict(self):
         return {
@@ -112,7 +164,15 @@ class Hospital(db.Model):
             "city": self.city,
             "latitude": self.latitude,
             "longitude": self.longitude,
+            "fallback_latitude": self.fallback_latitude,
+            "fallback_longitude": self.fallback_longitude,
+            "effective_latitude": self.effective_latitude,
+            "effective_longitude": self.effective_longitude,
+            "location_source": self.location_source,
+            "location_accuracy_km": self.location_accuracy_km,
+            "gps_accuracy_m": self.gps_accuracy_m,
             "is_verified": self.is_verified,
+            "is_active": self.is_active,
         }
 
 
@@ -187,6 +247,7 @@ class RequestMatch(db.Model):
             "request": self.request.to_dict() if self.request else None,
             "donor": self.donor.to_dict(include_contact=False) if self.donor else None,
             "donor_id": self.donor_id,
+            "donor_name": self.donor.full_name if self.donor else None,
             "match_score": self.match_score,
             "distance_km": self.distance_km,
             "status": self.status,
@@ -211,7 +272,9 @@ class DonationCertificate(db.Model):
         return {
             "id": self.id,
             "donor_id": self.donor_id,
+            "match_id": self.match_id,
             "donor_name": self.donor.full_name if self.donor else None,
+            "blood_group": self.donor.blood_group if self.donor else None,
             "hospital_name": self.hospital_name,
             "donation_date": self.donation_date.isoformat(),
             "units_donated": self.units_donated,

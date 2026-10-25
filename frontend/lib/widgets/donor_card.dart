@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/donor.dart';
 import '../utils/location_format.dart';
 
-/// A ranked donor row with score, distance, and broadcast response status.
+/// A ranked donor row with score, distance, and automated queue status.
 class DonorRankCard extends StatelessWidget {
   final Donor donor;
   final double score;
@@ -34,7 +34,7 @@ class DonorRankCard extends StatelessWidget {
       case 'completed':
         return 'Completed';
       default:
-        return 'Not notified';
+        return 'Up next in queue';
     }
   }
 

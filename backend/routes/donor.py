@@ -1,8 +1,16 @@
-from datetime import datetime, timedelta
+from datetime import datetime
+import math
 from flask import Blueprint, request, jsonify
 from extensions import db
-from models import Donor, BloodRequest, RequestMatch, DonationCertificate, log_action
+from models import (
+    Donor,
+    RequestMatch,
+    DonationCertificate,
+    MAX_LOCATION_ACCURACY_METERS,
+    log_action,
+)
 from utils.security import role_required, current_user_id
+from utils.dispatch_queue import advance_ranked_queues, expire_stale_dispatches
 
 donor_bp = Blueprint("donor", __name__, url_prefix="/api/donor")
 
@@ -17,7 +25,7 @@ def get_profile():
     donor = _get_current_donor()
     if not donor:
         return jsonify({"error": "Donor not found"}), 404
-    return jsonify(donor.to_dict()), 200
+    return jsonify(donor.to_dict(include_contact=True, include_saved_pin=True)), 200
 
 
 @donor_bp.put("/me")
@@ -27,11 +35,11 @@ def update_profile():
     if not donor:
         return jsonify({"error": "Donor not found"}), 404
     data = request.get_json(force=True)
-    for field in ["full_name", "city", "gender", "latitude", "longitude"]:
+    for field in ["full_name", "city", "gender"]:
         if field in data:
             setattr(donor, field, data[field])
     db.session.commit()
-    return jsonify(donor.to_dict()), 200
+    return jsonify(donor.to_dict(include_saved_pin=True)), 200
 
 
 @donor_bp.post("/availability")
@@ -41,9 +49,95 @@ def toggle_availability():
     if not donor:
         return jsonify({"error": "Donor not found"}), 404
     data = request.get_json(force=True)
-    donor.is_available = bool(data.get("is_available", not donor.is_available))
+    is_available = data.get("is_available", not donor.is_available)
+    if not isinstance(is_available, bool):
+        return jsonify({"error": "is_available must be a boolean"}), 400
+    if is_available and not (
+        donor.location_sharing_enabled
+        and donor.gps_latitude is not None
+        and donor.gps_longitude is not None
+    ):
+        return jsonify({"error": "Share your GPS location or choose a test pin before becoming available"}), 409
+
+    donor.is_available = is_available
+    if not is_available:
+        donor.location_sharing_enabled = False
+        donor.gps_latitude = None
+        donor.gps_longitude = None
+        donor.gps_accuracy_m = None
+        donor.gps_location_source = None
     db.session.commit()
-    return jsonify(donor.to_dict()), 200
+    return jsonify(donor.to_dict(include_saved_pin=True)), 200
+
+
+@donor_bp.put("/location")
+@role_required("donor")
+def update_location():
+    donor = _get_current_donor()
+    if not donor:
+        return jsonify({"error": "Donor not found"}), 404
+    data = request.get_json(force=True)
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    accuracy_m = data.get("accuracy_m")
+    if (
+        isinstance(latitude, bool)
+        or not isinstance(latitude, (int, float))
+        or not math.isfinite(latitude)
+        or not -90 <= latitude <= 90
+        or isinstance(longitude, bool)
+        or not isinstance(longitude, (int, float))
+        or not math.isfinite(longitude)
+        or not -180 <= longitude <= 180
+        or isinstance(accuracy_m, bool)
+        or not isinstance(accuracy_m, (int, float))
+        or not math.isfinite(accuracy_m)
+        or accuracy_m < 0
+    ):
+        return jsonify({"error": "Valid GPS coordinates and accuracy are required"}), 400
+    if accuracy_m > MAX_LOCATION_ACCURACY_METERS:
+        return jsonify({
+            "error": f"Location accuracy must be {MAX_LOCATION_ACCURACY_METERS} meters or better. Try again outdoors."
+        }), 400
+
+    donor.gps_latitude = latitude
+    donor.gps_longitude = longitude
+    donor.gps_accuracy_m = accuracy_m
+    donor.gps_location_source = "gps"
+    donor.location_sharing_enabled = True
+    db.session.commit()
+    return jsonify(donor.to_dict(include_saved_pin=True)), 200
+
+
+@donor_bp.put("/location/pin")
+@role_required("donor")
+def update_test_pin():
+    donor = _get_current_donor()
+    if not donor:
+        return jsonify({"error": "Donor not found"}), 404
+    data = request.get_json(force=True) or {}
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    if (
+        isinstance(latitude, bool)
+        or not isinstance(latitude, (int, float))
+        or not math.isfinite(latitude)
+        or not -90 <= latitude <= 90
+        or isinstance(longitude, bool)
+        or not isinstance(longitude, (int, float))
+        or not math.isfinite(longitude)
+        or not -180 <= longitude <= 180
+    ):
+        return jsonify({"error": "Valid latitude and longitude are required"}), 400
+
+    donor.gps_latitude = latitude
+    donor.gps_longitude = longitude
+    donor.gps_accuracy_m = 0
+    donor.gps_location_source = "test_pin"
+    donor.location_sharing_enabled = True
+    db.session.commit()
+    log_action("donor", donor.id, "updated_test_location_pin", "source=test_pin")
+    return jsonify(donor.to_dict(include_saved_pin=True)), 200
 
 
 @donor_bp.get("/requests")
@@ -51,6 +145,7 @@ def toggle_availability():
 def incoming_requests():
     """All emergency requests dispatched to this donor, newest first."""
     donor_id = current_user_id()
+    expire_stale_dispatches(donor_id=donor_id)
     matches = (
         RequestMatch.query.filter_by(donor_id=donor_id)
         .order_by(RequestMatch.dispatched_at.desc())
@@ -63,48 +158,40 @@ def incoming_requests():
 @role_required("donor")
 def accept_request(match_id):
     donor_id = current_user_id()
-    donor = Donor.query.filter_by(id=donor_id).with_for_update().first()
-    match = RequestMatch.query.filter_by(id=match_id, donor_id=donor_id).with_for_update().first()
+    match = RequestMatch.query.filter_by(id=match_id, donor_id=donor_id).first()
     if not match:
         return jsonify({"error": "Request not found"}), 404
     if match.status != "pending":
         return jsonify({"error": f"This request was already {match.status}"}), 400
+    if not match.request or match.request.status != "open":
+        match.status = "declined"
+        match.responded_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({"error": "This blood request is no longer open."}), 409
 
-    cutoff = datetime.utcnow() - timedelta(days=90)
-    active_elsewhere = RequestMatch.query.filter(
+    donor = Donor.query.filter_by(id=donor_id).with_for_update().first()
+    active_acceptance = RequestMatch.query.filter(
         RequestMatch.donor_id == donor_id,
-        RequestMatch.status.in_(["accepted", "completed"]),
-        RequestMatch.responded_at >= cutoff,
-        RequestMatch.id != match.id,
+        RequestMatch.status.in_(("accepted", "completed")),
     ).first()
-    if active_elsewhere:
-        return jsonify({"error": "You already have an accepted donation in progress"}), 409
+    if active_acceptance:
+        return jsonify({"error": "You already have an accepted donation in progress."}), 409
 
-    req = BloodRequest.query.filter_by(id=match.request_id).with_for_update().first()
-    if not req or req.status != "open":
-        return jsonify({"error": "This blood request is no longer open"}), 409
-    if not donor or not donor.is_eligible_now():
-        return jsonify({"error": "You are unavailable for new donations during the 90-day recovery period"}), 409
     match.status = "accepted"
     match.responded_at = datetime.utcnow()
-    db.session.flush()
-    accepted_count = RequestMatch.query.filter_by(request_id=req.id).filter(
-        RequestMatch.status.in_(["accepted", "completed"])
-    ).count()
-    if accepted_count >= req.units_needed:
-        RequestMatch.query.filter(
-            RequestMatch.request_id == req.id,
-            RequestMatch.status == "pending",
-            RequestMatch.id != match.id,
-        ).update({"status": "declined", "responded_at": datetime.utcnow()}, synchronize_session=False)
-    # An accepting donor is reserved for this donation; withdraw any other pending offers.
-    RequestMatch.query.filter(
+    next_requests = {match.request_id}
+    other_pending = RequestMatch.query.filter(
         RequestMatch.donor_id == donor_id,
-        RequestMatch.status == "pending",
         RequestMatch.id != match.id,
-    ).update({"status": "declined", "responded_at": datetime.utcnow()}, synchronize_session=False)
+        RequestMatch.status == "pending",
+    ).all()
+    for other in other_pending:
+        other.status = "declined"
+        other.responded_at = datetime.utcnow()
+        next_requests.add(other.request_id)
     db.session.commit()
     log_action("donor", donor_id, "accepted_request", f"match_id={match_id}")
+    advance_ranked_queues(next_requests)
     return jsonify(match.to_dict()), 200
 
 
@@ -122,37 +209,23 @@ def decline_request(match_id):
     match.responded_at = datetime.utcnow()
     db.session.commit()
     log_action("donor", donor_id, "declined_request", f"match_id={match_id}")
+    advance_ranked_queues({match.request_id})
     return jsonify(match.to_dict()), 200
 
 
 @donor_bp.post("/requests/<int:match_id>/complete")
 @role_required("donor")
 def complete_donation(match_id):
-    """Marks a donation as fulfilled and issues a certificate."""
+    """Donation completion requires hospital approval before a certificate is issued."""
     donor_id = current_user_id()
     match = RequestMatch.query.filter_by(id=match_id, donor_id=donor_id).first()
     if not match:
         return jsonify({"error": "Request not found"}), 404
-    if match.status != "accepted":
-        return jsonify({"error": "Only an accepted request can be marked complete"}), 400
-
-    match.status = "completed"
-    match.responded_at = datetime.utcnow()
-    donor = _get_current_donor()
-    donor.last_donation_date = datetime.utcnow()
-    donor.total_donations = (donor.total_donations or 0) + 1
-    donor.reliability_score = min(100, donor.reliability_score + 2)
-
-    cert = DonationCertificate(
-        donor_id=donor.id,
-        match_id=match.id,
-        hospital_name=match.request.hospital.name if match.request and match.request.hospital else "LifePulse Network",
-        units_donated=1,
-    )
-    db.session.add(cert)
-    db.session.commit()
-    log_action("donor", donor_id, "completed_donation", f"match_id={match_id}")
-    return jsonify({"match": match.to_dict(), "certificate": cert.to_dict()}), 200
+    if match.status == "completed":
+        return jsonify({"error": "This donation has already been approved by the hospital."}), 400
+    return jsonify({
+        "error": "Hospital approval is required before a donation certificate can be issued."
+    }), 400
 
 
 @donor_bp.get("/certificates")

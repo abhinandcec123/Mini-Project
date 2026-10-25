@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -11,7 +10,7 @@ import '../models/blood_request.dart';
 import '../widgets/donor_card.dart';
 import '../utils/location_format.dart';
 
-/// AI donor ranking view with radius-based broadcast dispatch.
+/// AI donor ranking view with an automatically advancing ranked queue.
 class AiRecommendationScreen extends StatefulWidget {
   final BloodRequest request;
   const AiRecommendationScreen({super.key, required this.request});
@@ -26,41 +25,22 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
   List<dynamic> _candidates = [];
   Map<String, dynamic>? _hospitalProfile;
   double _maxDistance = 50;
-  Timer? _queueRefreshTimer;
-  bool _refreshingQueue = false;
-  static const List<double> _weights = [35, 30, 20, 15];
-  bool _dispatching = false;
-  String? _dispatchMessage;
+  final List<double> _weights = [35, 30, 20, 15];
 
-  int get _broadcastCount => _rankedCandidates.where((candidate) {
-        final donor = Donor.fromJson(candidate['donor']);
-        return donor.isAvailable &&
-            donor.isEligibleNow &&
-            candidate['distance_km'] != null &&
-            candidate['match_status'] == null;
-      }).length;
-
-  Future<void> _broadcast() async {
-    if (_dispatching || _broadcastCount == 0) return;
+  void _setWeight(int index, double value) {
     setState(() {
-      _dispatching = true;
-      _dispatchMessage = null;
+      final remaining = 100 - value;
+      final otherIndices =
+          List.generate(4, (i) => i).where((i) => i != index).toList();
+      final otherTotal =
+          otherIndices.fold<double>(0, (sum, i) => sum + _weights[i]);
+      _weights[index] = value;
+      for (final i in otherIndices) {
+        _weights[i] = otherTotal == 0
+            ? remaining / 3
+            : _weights[i] / otherTotal * remaining;
+      }
     });
-    try {
-      final result = await context.read<AuthProvider>().api.post(
-        '/hospital/requests/${widget.request.id}/dispatch-ranked',
-        body: {'max_distance_km': _maxDistance},
-      );
-      if (!mounted) return;
-      final count = (result['dispatched_count'] as num?)?.toInt() ?? 0;
-      setState(() => _dispatchMessage =
-          'Request sent to $count donors within ${_maxDistance.round()} km.');
-      await _load(showLoading: false);
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _dispatchMessage = e.message);
-    } finally {
-      if (mounted) setState(() => _dispatching = false);
-    }
   }
 
   double _score(Map<String, dynamic> candidate) {
@@ -86,7 +66,6 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
       if (aPending != bPending) return aPending ? -1 : 1;
       return 0;
     }
-
     candidates.sort((a, b) {
       final byQueue = pendingFirst(a, b);
       if (byQueue != 0) return byQueue;
@@ -110,28 +89,13 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
   void initState() {
     super.initState();
     _load();
-    _queueRefreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      _refreshQueue();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
     });
-  }
-
-  Future<void> _refreshQueue() async {
-    if (!mounted || _loading || _refreshingQueue) return;
-    _refreshingQueue = true;
-    try {
-      await _load(showLoading: false);
-    } finally {
-      _refreshingQueue = false;
-    }
-  }
-
-  Future<void> _load({bool showLoading = true}) async {
-    if (showLoading) {
-      setState(() {
-        _loading = true;
-        _error = null;
-      });
-    }
     try {
       final api = context.read<AuthProvider>().api;
       final result = await api.get(
@@ -139,27 +103,17 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
         query: {'max_distance_km': _maxDistance},
       );
       final hospitalProfile = await api.get('/hospital/me');
-      if (mounted) {
-        setState(() {
-          _candidates = result;
-          _hospitalProfile = hospitalProfile;
-        });
-      }
+      setState(() {
+        _candidates = result;
+        _hospitalProfile = hospitalProfile;
+      });
     } on ApiException catch (e) {
-      if (mounted && showLoading) setState(() => _error = e.message);
+      setState(() => _error = e.message);
     } catch (e) {
-      if (mounted && showLoading) {
-        setState(() => _error = 'Could not load donor recommendations.');
-      }
+      setState(() => _error = 'Could not load donor recommendations.');
     } finally {
-      if (mounted && showLoading) setState(() => _loading = false);
+      if (mounted) setState(() => _loading = false);
     }
-  }
-
-  @override
-  void dispose() {
-    _queueRefreshTimer?.cancel();
-    super.dispose();
   }
 
   @override
@@ -179,62 +133,6 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
                         priority: widget.request.priority,
                         radiusKm: _maxDistance,
                       ),
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(children: [
-                                const Icon(Icons.radar,
-                                    color: Color(0xFF0891B2)),
-                                const SizedBox(width: 8),
-                                Text(
-                                    'Search radius: ${_maxDistance.round()} km',
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.w700)),
-                              ]),
-                              Slider(
-                                  value: _maxDistance,
-                                  min: 5,
-                                  max: 50,
-                                  divisions: 9,
-                                  label: '${_maxDistance.round()} km',
-                                  onChanged: (value) =>
-                                      setState(() => _maxDistance = value),
-                                  onChangeEnd: (_) => _load()),
-                              SizedBox(
-                                  width: double.infinity,
-                                  child: FilledButton.icon(
-                                    onPressed:
-                                        _dispatching || _broadcastCount == 0
-                                            ? null
-                                            : _broadcast,
-                                    icon: _dispatching
-                                        ? const SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(
-                                                strokeWidth: 2))
-                                        : const Icon(Icons
-                                            .notifications_active_outlined),
-                                    label: Text(_dispatching
-                                        ? 'Sending to donors…'
-                                        : 'Notify all $_broadcastCount eligible donors'),
-                                  )),
-                              if (_dispatchMessage != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 7),
-                                  child: Text(_dispatchMessage!,
-                                      style: const TextStyle(
-                                          fontSize: 12,
-                                          color: Color(0xFF475569))),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
                       const SizedBox(height: 16),
                       if (_rankedCandidates.isEmpty)
                         const _NoCandidates()
@@ -245,9 +143,8 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
                         ),
                         const SizedBox(height: 10),
                         const Text(
-                          'All eligible, available donors inside the selected radius are notified together. Critical requests rank the closest donors first.',
-                          style:
-                              TextStyle(fontSize: 12, color: Color(0xFF475569)),
+                          'Ranked dispatch contacts one donor at a time. If they decline or do not respond, the next donor is contacted automatically.',
+                          style: TextStyle(fontSize: 12, color: Color(0xFF475569)),
                         ),
                         const SizedBox(height: 18),
                         _CandidateSpotlight(
@@ -257,7 +154,7 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
                           priority: widget.request.priority,
                         ),
                         const SizedBox(height: 20),
-                        const Text('MATCHED DONORS',
+                        const Text('RANKED QUEUE',
                             style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w800,
@@ -271,8 +168,7 @@ class _AiRecommendationScreenState extends State<AiRecommendationScreen> {
                             distanceKm:
                                 (_rankedCandidates[i]['distance_km'] as num?)
                                     ?.toDouble(),
-                            matchStatus: _rankedCandidates[i]['match_status']
-                                ?.toString(),
+                            matchStatus: _rankedCandidates[i]['match_status']?.toString(),
                           ),
                       ],
                     ],
@@ -297,7 +193,9 @@ class _AlgorithmSummary extends StatelessWidget {
           borderRadius: BorderRadius.circular(16),
         ),
         child: Text(
-          '${priority == 'critical' ? 'CRITICAL MATCHING' : 'RANKED MATCHING'} · Availability 35% · Distance 30% · Eligibility 20% · Reliability 15% · ${radiusKm.round()} km radius',
+          priority == 'critical'
+              ? 'CRITICAL TRIAGE · Nearest eligible donors are contacted first; distance takes priority.'
+              : 'RANKED MATCHING · Availability 35% · Distance 30% · Eligibility 20% · Reliability 15% · ${radiusKm.round()} km radius',
           style: const TextStyle(
             color: Color(0xFFBAF6FF),
             fontSize: 12,
@@ -338,7 +236,7 @@ class _AlgorithmControls extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('FIXED MATCHING WEIGHTS',
+          const Text('TRIAGE ALGORITHM INSPECTOR',
               style: TextStyle(
                   color: Color(0xFF67E8F9),
                   fontSize: 10,
@@ -425,7 +323,8 @@ class _CandidateGeoMap extends StatelessWidget {
     final hospitalLatitude = (hospitalProfile?['latitude'] as num?)?.toDouble();
     final hospitalLongitude =
         (hospitalProfile?['longitude'] as num?)?.toDouble();
-    final hospitalPoint = hospitalLatitude != null && hospitalLongitude != null
+    final hospitalPoint = hospitalLatitude != null &&
+            hospitalLongitude != null
         ? LatLng(hospitalLatitude, hospitalLongitude)
         : null;
     final points = [
@@ -648,8 +547,7 @@ class _CandidateSpotlight extends StatelessWidget {
               child: OutlinedButton.icon(
                 onPressed: null,
                 icon: const Icon(Icons.autorenew, size: 17),
-                label:
-                    Text(_queueStatus(candidate['match_status']?.toString())),
+                label: Text(_queueStatus(candidate['match_status']?.toString())),
               ),
             ),
           ],
@@ -663,13 +561,13 @@ class _CandidateSpotlight extends StatelessWidget {
       case 'pending':
         return 'Request sent — waiting for response';
       case 'accepted':
-        return 'Accepted';
+        return 'Accepted — preparing next donor if needed';
       case 'declined':
-        return 'Declined';
+        return 'Declined — next donor is being contacted';
       case 'completed':
         return 'Donation completed';
       default:
-        return 'Not yet notified';
+        return 'First donor in the ranked dispatch queue';
     }
   }
 }

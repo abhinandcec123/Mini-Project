@@ -19,31 +19,53 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def score_donor(donor, request_lat, request_lng, max_distance_km=50):
+def score_donor(donor, request_lat, request_lng, max_distance_km=50, include_unavailable=False):
     """Returns (score 0-100, distance_km) or (None, None) if disqualified."""
-    if not donor.is_available or not donor.is_active:
+    if not donor.is_active:
+        return None, None
+    if not donor.is_available and not include_unavailable:
         return None, None
     if not donor.is_eligible_now():
         return None, None
 
-    distance = haversine_km(donor.latitude, donor.longitude, request_lat, request_lng)
+    # Use registered area coordinates for distance; precise GPS is optional.
+    donor_lat = getattr(donor, "registered_latitude", None)
+    donor_lng = getattr(donor, "registered_longitude", None)
+    if donor_lat is None:
+        donor_lat = donor.latitude
+    if donor_lng is None:
+        donor_lng = donor.longitude
+    distance = haversine_km(donor_lat, donor_lng, request_lat, request_lng)
 
-    if distance is None or distance > max_distance_km:
+    if distance is None:
+        distance_factor = 0.5
+    elif distance > max_distance_km:
         return None, distance
-    # Fixed matching weights shown in AI Matches: availability 35%, distance 30%,
-    # eligibility 20%, reliability 15%. Candidate filters make the first and third
-    # components 100% for all returned donors.
-    total = 35 + 30 * (1 - distance / max_distance_km) + 20 + 15 * (donor.reliability_score / 100)
-    return round(total, 2), (round(distance, 2) if distance is not None else None)
+    else:
+        distance_factor = 1 - (distance / max_distance_km)
+
+    # Keep this score aligned with the hospital recommendation card.
+    availability_score = 35 if donor.is_available else 0
+    distance_score = 30 * distance_factor
+    eligibility_score = 20
+    reliability_score = 15 * (donor.reliability_score / 100)
+    total = availability_score + distance_score + eligibility_score + reliability_score
+    return round(total, 2), (round(distance, 4) if distance is not None else None)
 
 
-def rank_donors_for_request(donors, blood_group, request_lat, request_lng, max_distance_km=50):
+def rank_donors_for_request(donors, blood_group, request_lat, request_lng, max_distance_km=50, include_unavailable=False):
     compatible_groups = COMPATIBLE_DONORS.get(blood_group, [blood_group])
     ranked = []
     for donor in donors:
         if donor.blood_group not in compatible_groups:
             continue
-        score, distance = score_donor(donor, request_lat, request_lng, max_distance_km)
+        score, distance = score_donor(
+            donor,
+            request_lat,
+            request_lng,
+            max_distance_km,
+            include_unavailable=include_unavailable,
+        )
         if score is None:
             continue
         ranked.append({"donor": donor, "score": score, "distance_km": distance})
