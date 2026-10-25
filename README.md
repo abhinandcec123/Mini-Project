@@ -26,22 +26,20 @@ lifepulse/
 | "Dispatch" (hospital sends request to a donor) | `POST /api/hospital/requests/<id>/dispatch/<donor_id>` |
 | AI donor ranking ("Simulate"/recommendation) | `utils/ai_matching.py` — weighted scorer (distance/reliability/eligibility/experience), surfaced in `ai_recommendation_screen.dart` |
 | Admin: registry, remove donor/hospital, audit log, inventory | `routes/admin.py` + `admin_dashboard_screen.dart` |
-| Donation certificates | Hospital approval issues one-unit records; donors can download PDF certificates from the Donor Portal |
+| Donation certificates | `DonationCertificate` model issued on `.../complete`, listed in Donor Portal |
 | Single mobile number constraint | `normalize_phone()` + `UNIQUE` column in `models.py` |
 | Route guards / no cross-role access without logout | `AuthProvider` + `_RootRouter` in `main.dart` |
 | Session persistence | `shared_preferences` (mobile/desktop equivalent of `sessionStorage`) |
 
-Some additions remain outside this mini-project scope:
-- **Push notifications** → new donor requests are retrieved by refreshing
-  the donor portal; push notifications can be added later.
-
-The candidate screen includes an OpenStreetMap view with the hospital GPS pin
-and available donors who explicitly opt in to foreground GPS sharing. Donors
-are not tracked in the background. When accurate GPS pins are unavailable,
-the app leaves distance unknown rather than inventing map coordinates.
-Donors can place a clearly labeled test pin to simulate far-away locations;
-their personal map is private, while admins see only opted-in donors marked
-available. The admin map refreshes the latest donor-submitted pins periodically.
+Two things from the original doc were web-specific and don't carry over
+1:1 to a mobile stack, so they're re-scoped rather than ignored:
+- **PDF certificate generation** (`html2canvas-pro` + `jsPDF`, oklch color
+  bug) → the backend now issues certificate *records*; rendering them as a
+  downloadable PDF in Flutter is a small follow-up using the `pdf` +
+  `printing` packages, noted in `frontend/README.md`.
+- **Interactive geospatial radar map** → the AI ranking screen shows
+  distance as a sortable number instead of a live map widget, to keep this
+  a manageable mini-project; swap in `google_maps_flutter` later if needed.
 
 ## Honest note on "without any flaws"
 

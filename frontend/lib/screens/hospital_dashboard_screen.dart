@@ -398,34 +398,6 @@ class _HospitalLocationCard extends StatelessWidget {
   }
 }
 
-class _FacilityDetail extends StatelessWidget {
-  final IconData icon;
-  final String label;
-
-  const _FacilityDetail({required this.icon, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: const Color(0xFF64748B)),
-          const SizedBox(width: 6),
-          Text(label,
-              style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
-        ],
-      ),
-    );
-  }
-}
-
 class _CreateRequestSheet extends StatefulWidget {
   const _CreateRequestSheet();
 
